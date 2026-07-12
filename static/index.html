@@ -1,0 +1,536 @@
+<!doctype html>
+<html lang="de">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Deutsch Lernstudio</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;700&family=Source+Sans+3:wght@400;600;700&display=swap"
+      rel="stylesheet"
+    />
+    <link rel="stylesheet" href="/static/assets/styles.css" />
+  </head>
+  <body>
+    <div class="app-shell">
+      <section class="shell-hub">
+        <header class="shell-topbar shell-topbar-compact shell-topbar-flat">
+          <p class="eyebrow shell-brand-mark">Deutsch Lernstudio</p>
+          <nav class="primary-nav primary-nav-compact primary-nav-flat" aria-label="Primary navigation">
+            <button class="primary-nav-btn active" data-primary-tab="home" type="button">
+              <span class="primary-nav-label">Start</span>
+            </button>
+            <button class="primary-nav-btn" data-primary-tab="tutor" type="button">
+              <span class="primary-nav-label">Tutor</span>
+            </button>
+            <button class="primary-nav-btn" data-primary-tab="exam-prep" type="button">
+              <span class="primary-nav-label">Prüfung</span>
+            </button>
+            <button class="primary-nav-btn" data-primary-tab="settings" type="button">
+              <span class="primary-nav-label">Einstellungen</span>
+            </button>
+          </nav>
+          <div class="shell-controls shell-controls-compact">
+            <div class="shell-control-card shell-control-card-compact">
+              <label class="field inline shell-level-field">
+                <span data-i18n="global_level">Globales Niveau</span>
+                <select id="globalLevel">
+                  <option value="A1">A1</option>
+                  <option value="A2">A2</option>
+                  <option value="B1">B1</option>
+                  <option value="B2" selected>B2</option>
+                  <option value="C1">C1</option>
+                  <option value="C2">C2</option>
+                </select>
+              </label>
+            </div>
+          </div>
+          <div class="shell-status-cache" hidden aria-hidden="true">
+            <span id="metricGoal">Goethe B2</span>
+            <span id="metricToday">Start</span>
+            <span id="metricDue">-</span>
+            <span id="metricStreak">-</span>
+          </div>
+        </header>
+      </section>
+
+      <main class="tab-panels">
+        <section class="tab-panel active" id="tab-home">
+          <div class="home-shell home-shell-flat">
+            <section class="home-ops-strip">
+              <div id="homeMissionCard" class="home-ops-cell home-ops-goal"></div>
+              <div id="homeMissionActions" class="home-ops-cell home-ops-next"></div>
+              <div id="homeQuickStart" class="home-ops-cell home-ops-quick"></div>
+              <div id="homeCoachBrief" class="home-ops-cell home-ops-status"></div>
+            </section>
+          </div>
+        </section>
+
+        <section class="tab-panel" id="tab-chat">
+          <div class="panel-grid panel-grid-chat tutor-grid tutor-grid-compact">
+            <article class="tutor-stage-card tutor-main-shell">
+              <div class="tutor-stage-head tutor-stage-head-compact">
+                <div class="tutor-presence-copy">
+                  <h2 data-i18n="chat_title">Tutor</h2>
+                </div>
+                <div class="tutor-stage-tools">
+                  <button id="chatFinishBtn" class="ghost-btn" data-i18n="chat_finish">Feedback</button>
+                </div>
+              </div>
+              <div class="tutor-dialog-stage">
+                <div id="chatMessages" class="chat-stream tutor-chat-stream"></div>
+                <div class="composer tutor-composer-shell">
+                  <div class="tutor-composer-head">
+                    <div id="chatVoiceStatus" class="muted tutor-inline-status">Bereit.</div>
+                  </div>
+                  <textarea id="chatInput" placeholder="Schreiben oder diktieren Sie auf Deutsch ..."></textarea>
+                  <div class="inline-actions tutor-composer-actions">
+                    <button id="chatTtsBtn" class="ghost-btn" type="button">Audio an</button>
+                    <button
+                      id="chatMicBtn"
+                      class="mic-icon-btn"
+                      type="button"
+                      aria-label="Diktieren"
+                      aria-pressed="false"
+                      title="Diktieren"
+                    >
+                      <svg viewBox="0 0 24 24" aria-hidden="true">
+                        <path d="M12 15a3 3 0 0 0 3-3V7a3 3 0 1 0-6 0v5a3 3 0 0 0 3 3Z"></path>
+                        <path d="M19 11a1 1 0 1 0-2 0 5 5 0 1 1-10 0 1 1 0 1 0-2 0 7 7 0 0 0 6 6.93V21H9a1 1 0 1 0 0 2h6a1 1 0 1 0 0-2h-2v-3.07A7 7 0 0 0 19 11Z"></path>
+                      </svg>
+                    </button>
+                    <button id="chatInterruptBtn" class="ghost-btn hidden" type="button">Unterbrechen</button>
+                    <button id="chatSendBtn" class="primary-btn" data-i18n="send">Senden</button>
+                  </div>
+                  <div id="chatStatus" class="muted tutor-stage-status">Bereit.</div>
+                </div>
+              </div>
+            </article>
+            <aside class="tutor-side-card tutor-controls-rail tutor-controls-collapsed">
+              <details class="tutor-utility-group" open>
+                <summary>Verlauf</summary>
+                <div class="tutor-utility-body">
+                  <label class="field">
+                    <span data-i18n="history">Verlauf</span>
+                    <select id="chatHistorySelect"></select>
+                  </label>
+                  <div class="inline-actions">
+                    <button id="chatLoadHistoryBtn" class="ghost-btn" data-i18n="load">Laden</button>
+                    <button id="chatNewBtn" class="ghost-btn" data-i18n="new_session">Neu</button>
+                  </div>
+                </div>
+              </details>
+              <details class="tutor-utility-group">
+                <summary>Audio</summary>
+                <div class="tutor-utility-body">
+                  <div class="voice-control-grid">
+                    <label class="field">
+                      <span>Stimme</span>
+                      <select id="chatVoiceGender">
+                        <option value="female">Weibliche Stimme</option>
+                        <option value="male">Männliche Stimme</option>
+                      </select>
+                    </label>
+                    <label class="field">
+                      <span>Variante</span>
+                      <select id="chatVoiceVariant">
+                        <option value="standard">Hochdeutsch</option>
+                        <option value="regional">Regional</option>
+                      </select>
+                    </label>
+                    <label class="field">
+                      <span>Region</span>
+                      <select id="chatVoiceRegion"></select>
+                    </label>
+                  </div>
+                  <div class="inline-actions">
+                    <button id="chatReplayBtn" class="ghost-btn" type="button">Letzte Antwort</button>
+                  </div>
+                  <div id="chatVoiceSummary" class="muted">Wiedergabe bereit.</div>
+                </div>
+              </details>
+              <details class="tutor-utility-group">
+                <summary>Feedback</summary>
+                <div class="tutor-utility-body">
+                  <div id="chatCorrection" class="soft-panel support-status-panel">Noch keine Korrektur.</div>
+                  <div id="chatFinalFeedback" class="soft-panel support-status-panel">Noch kein Abschlussfeedback.</div>
+                </div>
+              </details>
+              <details class="tutor-utility-group">
+                <summary>Hinweise</summary>
+                <div class="tutor-utility-body">
+                  <ul id="chatTips" class="simple-list"></ul>
+                </div>
+              </details>
+            </aside>
+          </div>
+        </section>
+
+        <section class="tab-panel" id="tab-exams">
+          <div id="examPrepShell" class="exam-prep-shell">
+            <aside id="examHub" class="exam-prep-rail">
+              <div class="form-grid">
+                <label class="field">
+                  <span data-i18n="scope">Format</span>
+                  <select id="examScope">
+                    <option value="module">Ein Modul</option>
+                    <option value="full" selected>Gesamtprüfung</option>
+                  </select>
+                </label>
+                <label class="field">
+                  <span data-i18n="module">Modul</span>
+                  <select id="examModule">
+                    <option value="lesen">Lesen</option>
+                    <option value="hoeren">Hören</option>
+                    <option value="schreiben">Schreiben</option>
+                    <option value="sprechen">Sprechen</option>
+                  </select>
+                </label>
+              </div>
+              <div class="inline-actions">
+                <button id="examGenerateBtn" class="primary-btn">Start</button>
+              </div>
+              <div id="examPausedSessionPanel" class="soft-panel hidden">
+                <strong>Pausierte Sitzung</strong>
+                <p id="examPausedSessionSummary" class="muted">Keine pausierte Sitzung vorhanden.</p>
+                <div class="inline-actions">
+                  <button id="examResumePausedBtn" class="primary-btn">Fortsetzen</button>
+                  <button id="examRestartPausedBtn" class="ghost-btn">Neu starten</button>
+                </div>
+              </div>
+              <section class="exam-rail-section">
+                <strong>Sätze</strong>
+                <div id="examWorkspaceSets" class="list-panel exam-choice-grid"></div>
+              </section>
+              <section class="exam-rail-section">
+                <strong>Offizielle Ansichten</strong>
+                <div id="examWorkspaceAssets" class="list-panel exam-choice-grid exam-choice-grid-assets"></div>
+              </section>
+              <section class="exam-rail-section">
+                <strong>Mock</strong>
+                <div id="examWorkspaceMock" class="list-panel exam-choice-grid exam-choice-grid-mock">Mock-Ansicht wird vorbereitet.</div>
+              </section>
+            </aside>
+            <div
+              id="examRailResizeHandle"
+              class="exam-rail-resize-handle"
+              role="separator"
+              aria-label="Breite der Prüfungsleiste anpassen"
+              aria-controls="examHub examWorkspace"
+              aria-orientation="vertical"
+              tabindex="0"
+            ></div>
+            <section id="examWorkspace" class="exam-workspace exam-workspace-persistent">
+              <div class="exam-workspace-stage">
+                <div class="card-head">
+                  <div>
+                    <h2 id="examWorkspaceTitle">Arbeitsfläche</h2>
+                    <p id="examWorkspaceSubtitle" class="muted"></p>
+                  </div>
+                  <div class="inline-actions">
+                    <div id="examTimer" class="timer-badge hidden">00:00</div>
+                    <a id="examWorkspaceOpenSource" class="ghost-link" href="#" target="_blank" rel="noreferrer">Original öffnen</a>
+                    <button id="examWorkspaceChangeBtn" class="ghost-btn">Zur Auswahl</button>
+                    <button id="examWorkspaceCloseBtn" class="ghost-btn">Pausieren</button>
+                  </div>
+                </div>
+                <div id="examWorkspaceBody" class="exam-stage-body"></div>
+              </div>
+            </section>
+          </div>
+        </section>
+
+        <section class="tab-panel" id="tab-settings">
+          <div class="settings-shell settings-shell-flat">
+            <article class="card settings-form-card settings-form-card-flat">
+              <div class="card-head"><h2>Einstellungen</h2></div>
+              <div class="settings-flat-groups">
+                <section class="settings-flat-group">
+                  <h3>Allgemein</h3>
+                  <div class="form-grid">
+                    <label class="field">
+                      <span>UI-Sprache</span>
+                      <select id="uiLanguageSelect">
+                        <option value="de">Deutsch</option>
+                        <option value="es">Español</option>
+                        <option value="en">English</option>
+                        <option value="fr">Français</option>
+                        <option value="it">Italiano</option>
+                        <option value="pt">Português</option>
+                      </select>
+                    </label>
+                    <label class="field">
+                      <span>Erklärungssprache</span>
+                      <select id="explanationLanguageSelect">
+                        <option value="es">Español</option>
+                        <option value="de">Deutsch</option>
+                        <option value="en">English</option>
+                        <option value="fr">Français</option>
+                        <option value="it">Italiano</option>
+                        <option value="pt">Português</option>
+                      </select>
+                    </label>
+                    <label class="field">
+                      <span>Standard-Zielprüfung</span>
+                      <select id="settingsGoalExam">
+                        <option value="goethe_a1">Goethe A1</option>
+                        <option value="goethe_a2">Goethe A2</option>
+                        <option value="goethe_b1">Goethe B1</option>
+                        <option value="goethe_b2">Goethe B2</option>
+                        <option value="goethe_c1">Goethe C1</option>
+                        <option value="goethe_c2">Goethe C2</option>
+                        <option value="telc_b2">telc B2</option>
+                        <option value="oesd_b2">ÖSD B2</option>
+                        <option value="testdaf">TestDaF</option>
+                      </select>
+                    </label>
+                    <label class="field">
+                      <span>Standard-Zielniveau</span>
+                      <select id="settingsGoalLevel">
+                        <option value="A1">A1</option>
+                        <option value="A2">A2</option>
+                        <option value="B1">B1</option>
+                        <option value="B2">B2</option>
+                        <option value="C1">C1</option>
+                        <option value="C2">C2</option>
+                      </select>
+                    </label>
+                    <label class="field field-wide">
+                      <span>Mock-Hören-Stimme</span>
+                      <select id="settingsMockAudioVoiceGender">
+                        <option value="auto">Automatisch</option>
+                        <option value="female">Frau</option>
+                        <option value="male">Mann</option>
+                      </select>
+                    </label>
+                  </div>
+                </section>
+                <section class="settings-flat-group">
+                  <h3>Tutor</h3>
+                  <div class="form-grid profile-voice-grid">
+                    <label class="field">
+                      <span>Stimme</span>
+                      <select id="profileTutorVoiceGender">
+                        <option value="female">Weibliche Stimme</option>
+                        <option value="male">Männliche Stimme</option>
+                      </select>
+                    </label>
+                    <label class="field">
+                      <span>Variante</span>
+                      <select id="profileTutorVoiceVariant">
+                        <option value="standard">Hochdeutsch</option>
+                        <option value="regional">Regional</option>
+                      </select>
+                    </label>
+                    <label class="field">
+                      <span>Region</span>
+                      <select id="profileTutorVoiceRegion"></select>
+                    </label>
+                  </div>
+                  <div class="inline-actions profile-tutor-actions">
+                    <button id="profileTutorTtsToggle" class="ghost-btn" type="button">Wiedergabe an</button>
+                  </div>
+                  <div id="profileTutorSummary" class="settings-inline-note" hidden aria-hidden="true"></div>
+                </section>
+              </div>
+              <div class="settings-status-inline">
+                <div id="settingsState" class="settings-status-line">Einstellungen werden geladen.</div>
+                <div id="settingsMockAudioState" class="settings-status-line">Mock-Stimme wird geladen.</div>
+              </div>
+              <div class="inline-actions pad-inline">
+                <button id="settingsSaveBtn" class="primary-btn">Einstellungen speichern</button>
+              </div>
+            </article>
+          </div>
+        </section>
+      </main>
+    </div>
+
+    <template id="legacyCompatTemplate">
+      <section id="tabContextBar" class="tab-context-strip" hidden aria-hidden="true"></section>
+      <div id="profileHeroSummary" class="profile-summary-grid"></div>
+      <div id="examMeta" class="exam-meta-panel">Goethe-Struktur wird geladen ...</div>
+      <div id="examWorkspaceMeta" class="exam-workspace-meta">Die offizielle Prüfungsansicht wird vorbereitet ...</div>
+      <div id="examResults" class="exam-stage-summary">Wählen Sie links Satz und Ansicht. Das Material erscheint direkt in dieser Arbeitsfläche.</div>
+      <div id="examWorkspaceGuide" class="exam-guide-strip">Offizielle PDF-, Audio- oder Digitalfassungen bleiben die primäre Quelle. Der Mock ist klar getrennt.</div>
+      <div id="examPracticeSets"></div>
+      <div id="examLaunchSummary"></div>
+      <div id="examSupportCompat">
+        <button id="examHistoryBtn" type="button">Verlauf laden</button>
+        <div id="examResources"></div>
+        <div id="examHistoryList"></div>
+        <div id="examMockHealth"></div>
+        <div id="examSecondaryTools"></div>
+      </div>
+
+      <div id="progressCompat">
+        <button id="progressRefreshBtn" type="button">Aktualisieren</button>
+        <div id="progressHeroStats"></div>
+        <div id="progressStoryCard"></div>
+        <div id="progressProbabilities"></div>
+        <div id="progressSkills"></div>
+        <div id="progressPlan"></div>
+        <div id="progressMistakes"></div>
+        <div id="progressRoadmap"></div>
+        <div id="progressPlacement"></div>
+      </div>
+
+      <div id="placementCompat">
+        <button id="placementStartBtn" type="button">Test starten</button>
+        <button id="placementSubmitBtn" type="button">Ergebnis berechnen</button>
+        <div id="placementQuestions"></div>
+        <div id="placementResults"></div>
+        <div id="placementHistoryList"></div>
+      </div>
+
+      <div id="roadmapCompat">
+        <select id="roadmapTargetLevel">
+          <option value="A1">A1</option>
+          <option value="A2">A2</option>
+          <option value="B1">B1</option>
+          <option value="B2" selected>B2</option>
+          <option value="C1">C1</option>
+          <option value="C2">C2</option>
+        </select>
+        <select id="roadmapTargetExam">
+          <option value="goethe_a1">Goethe A1</option>
+          <option value="goethe_a2">Goethe A2</option>
+          <option value="goethe_b1">Goethe B1</option>
+          <option value="goethe_b2" selected>Goethe B2</option>
+          <option value="goethe_c1">Goethe C1</option>
+          <option value="goethe_c2">Goethe C2</option>
+          <option value="telc_b2">telc B2</option>
+          <option value="oesd_b2">ÖSD B2</option>
+          <option value="testdaf">TestDaF</option>
+        </select>
+        <button id="roadmapGenerateBtn" type="button">Lernplan erstellen</button>
+        <button id="roadmapActivateBtn" type="button">Als aktiven Plan setzen</button>
+        <div id="roadmapOutput"></div>
+        <div id="roadmapCurrent"></div>
+      </div>
+
+      <div id="grammarCompat">
+        <select id="grammarTopicSelect"></select>
+        <select id="grammarType">
+          <option value="fill_blank">Lückentext</option>
+        </select>
+        <div id="grammarTopicMeta"></div>
+        <button id="grammarGenerateBtn" type="button">Übungen erzeugen</button>
+        <button id="grammarSubmitBtn" type="button">Grammatik korrigieren</button>
+        <div id="grammarQuestions"></div>
+        <div id="grammarTheoryBox"></div>
+        <div id="grammarResults"></div>
+      </div>
+
+      <div id="writingCompat">
+        <select id="writingType">
+          <option value="email_formal">Formelle E-Mail</option>
+        </select>
+        <select id="writingExam">
+          <option value="goethe">Goethe</option>
+        </select>
+        <input id="writingTopic" type="text" />
+        <button id="writingPromptBtn" type="button">Aufgabe erzeugen</button>
+        <button id="writingGradeBtn" type="button">Text korrigieren</button>
+        <div id="writingPromptBox"></div>
+        <textarea id="writingInput"></textarea>
+        <div id="writingResults"></div>
+      </div>
+
+      <div id="speakingCompat">
+        <select id="speakingMode">
+          <option value="roleplay">Rollenspiel</option>
+        </select>
+        <select id="speakingExam">
+          <option value="goethe">Goethe</option>
+        </select>
+        <input id="speakingTopic" type="text" />
+        <button id="speakingStartBtn" type="button">Simulation starten</button>
+        <button id="speakingMicBtn" type="button">Diktieren</button>
+        <button id="speakingSendBtn" type="button">Antwort senden</button>
+        <div id="speakingScenario"></div>
+        <div id="speakingTranscript"></div>
+        <textarea id="speakingInput"></textarea>
+        <div id="speakingVoiceStatus"></div>
+        <div id="speakingFeedback"></div>
+      </div>
+
+      <div id="vocabCompat">
+        <input id="vocabTopic" type="text" />
+        <input id="vocabCount" type="number" value="12" />
+        <input id="vocabDeckName" type="text" />
+        <button id="vocabGenerateBtn" type="button">Wortschatz erzeugen</button>
+        <button id="vocabCreateDeckBtn" type="button">Auswahl als Kartensatz speichern</button>
+        <div id="vocabTable"></div>
+        <div id="vocabImportResult"></div>
+      </div>
+
+      <div id="reviewCompat">
+        <input id="deckName" type="text" />
+        <input id="deckDescription" type="text" />
+        <button id="deckCreateBtn" type="button">Kartensatz erstellen</button>
+        <button id="decksRefreshBtn" type="button">Kartensätze aktualisieren</button>
+        <div id="starterDeckList"></div>
+        <div id="deckList"></div>
+        <div id="reviewHeroStats"></div>
+        <div id="reviewQueueSummary"></div>
+        <select id="reviewDeckSelect"></select>
+        <button id="reviewNextBtn" type="button">Nächste Karte</button>
+        <button id="reviewFlipBtn" type="button">Umdrehen</button>
+        <div id="reviewCardBox"></div>
+        <div class="rating-grid">
+          <button class="rate-btn" data-quality="0" type="button">0</button>
+          <button class="rate-btn" data-quality="2" type="button">2</button>
+          <button class="rate-btn" data-quality="3" type="button">3</button>
+          <button class="rate-btn" data-quality="4" type="button">4</button>
+          <button class="rate-btn" data-quality="5" type="button">5</button>
+        </div>
+        <div id="reviewResult"></div>
+      </div>
+    </template>
+
+    <div id="appBusyBanner" class="app-busy-banner hidden" aria-live="polite"></div>
+    <div id="appToastRail" class="app-toast-rail" aria-live="polite" aria-atomic="false"></div>
+    <div id="confirmModal" class="modal-shell hidden" aria-hidden="true">
+      <div class="modal-backdrop" data-close-confirm-modal="true"></div>
+      <section class="modal-card" role="dialog" aria-modal="true" aria-labelledby="confirmModalTitle">
+        <div class="modal-head">
+          <h2 id="confirmModalTitle">Bestätigung</h2>
+        </div>
+        <p id="confirmModalMessage" class="modal-copy">Bitte bestätigen Sie diese Aktion.</p>
+        <div class="inline-actions">
+          <button id="confirmModalCancelBtn" class="ghost-btn">Abbrechen</button>
+          <button id="confirmModalConfirmBtn" class="primary-btn">Bestätigen</button>
+        </div>
+      </section>
+    </div>
+    <div id="legacySchemaStrings" hidden aria-hidden="true">
+      Stellen Sie zuerst Format und Modul ein.
+      Arbeitsansicht öffnen
+      Goethe-Prüfungssatz
+      Goethe-Prüfungsworkspace
+      Goethe-Prüfungsansicht
+      Goethe-Arbeitsansicht
+      Offizielle Ansichten
+      AI-Mock Praxis
+      Verfuegbare Trainingssaetze
+      Verfügbare Trainingssätze
+      Offizielle Ressourcen und Begleitmaterial
+      GER-orientierte Diagnose
+      Die Diagnose verteilt sich ueber mehrere Fertigkeiten.
+      Die Diagnose verteilt sich über mehrere Fertigkeiten.
+      Die App verdichtet daraus einen umsetzbaren Plan fuer die naechsten Wochen.
+      Die App verdichtet daraus einen umsetzbaren Plan für die nächsten Wochen.
+      Hier steuern Sie Sprache, Zielpruefung und Mock-Audio zentral.
+      Hier steuern Sie Sprache, Zielprüfung und Mock-Audio zentral.
+      Die rechte Seite sammelt Feedback pro Runde
+      welche globalen Einstellungen gerade gespeichert sind
+      Kartensatz auswählen
+    </div>
+    <script src="/static/assets/app-helpers.js" defer></script>
+    <script src="/static/assets/tutor-runtime.js" defer></script>
+    <script src="/static/assets/app-features.js" defer></script>
+    <script src="/static/assets/app.js" defer></script>
+  </body>
+</html>

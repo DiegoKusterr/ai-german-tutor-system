@@ -1,0 +1,9 @@
+fastapi
+uvicorn
+python-dotenv
+websockets<14
+python-multipart
+pytest
+trustme
+faster-whisper
+piper-tts
