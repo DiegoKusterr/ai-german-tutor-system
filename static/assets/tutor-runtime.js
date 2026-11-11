@@ -699,6 +699,10 @@
     activeAudioRuntime = null;
     stopAudioElementPlayback();
     if (cancelBrowser && browserSpeechSupported()) {
+      state.chatSpeechPendingText = "";
+      window.clearTimeout(state.chatSpeechVoiceTimer);
+      window.clearTimeout(state.chatSpeechStartTimer);
+      state.chatSpeechUtterance = null;
       try {
         window.speechSynthesis.cancel();
       } catch {
