@@ -2,7 +2,7 @@
 
 A personal engineering portfolio project for German conversation practice and structured study. It combines a Python/FastAPI backend, a browser interface, local Ollama inference, and persistent learning workflows. The aim is to connect practice, feedback, review and progress tracking while keeping the application's learning data on the user's computer.
 
-This is a single-user prototype, not a production service or a validated language assessment product. Backend behavior has automated coverage; complete browser, audio and fresh-install workflows have not been verified end to end.
+This is a **desktop-first, locally hosted, single-user prototype**, not a production service or a validated language assessment product. Windows desktop browser text conversations and browser-based German voice playback have been manually tested. Running the app requires local Python, Ollama and dependency setup; this repository is not a publicly hosted interactive demo.
 
 ## Implemented features
 
@@ -145,9 +145,10 @@ Automated validation has used an existing Windows environment with Python **3.11
 | --- | --- |
 | Verified by automated backend tests | Schemas, grammar/practice services, flashcards/review, target-level readiness, assessment input guards, completed-speaking-session rejection, CSV escaping and configuration loading |
 | Verified in process with synthetic data | API behavior, local CORS handling, conversation commit/history, JSON save/load and SQLite interactions |
-| Verified through mocks/source checks | Ollama request consistency, streaming events and truncation metadata, launcher defaults, public-mode safeguards and TTS adapter behavior |
+| Verified through mocks/source checks | Ollama request consistency, streaming events and truncation metadata, launcher defaults, public-mode safeguards, TTS adapters and browser voice selection/playback lifecycle |
 | Verified by a short local API smoke test | Integrated application with existing `llama3.2:1b`: three fictional German conversation turns, genuine Ollama responses, incremental streaming, context recall and conversation persistence after restarting only FastAPI |
-| Requires further integration/manual testing | Complete browser navigation, microphone input, speech recognition, audio playback, LAN and optional HTTPS |
+| Manually tested on Windows desktop | Browser text conversations and browser-based German voice playback |
+| Requires further integration/manual testing | Complete browser navigation, microphone capture/transcription, optional audio providers and HTTPS; mobile layouts and audio workflows are not validated or optimized |
 | Not established | Fresh installation, long-term reliability, production/public deployment, validated CEFR proficiency or exam pass prediction |
 
 Earlier real-Ollama investigation informed the example configuration. The subsequent three-turn smoke test verifies only the short local API workflow above; it does not establish general language quality, fully functional voice interaction or long-term reliability. Mocked request tests do not prove actual model availability, speed, response quality or elimination of model reloads on another machine.
@@ -165,7 +166,13 @@ $env:PYTEST_DISABLE_PLUGIN_AUTOLOAD = '1'
 .\.venv\Scripts\python.exe -B -m pytest tests -q -p no:cacheprovider --basetemp (Join-Path $env:APP_DATA_DIR 'pytest')
 ```
 
-Close that terminal afterwards so these process-only data overrides are not reused for normal study. Test artifacts stay in the temporary directory. Tests mock Ollama and audio generation; the command is not an operating-system network sandbox. Audit runs additionally used an external offline guard, which is not part of the application. A passing suite does not establish browser/audio or fresh-install success.
+Close that terminal afterwards so these process-only data overrides are not reused for normal study. Test artifacts stay in the temporary directory. Tests mock Ollama and audio generation; the command is not an operating-system network sandbox. Audit runs additionally used an external offline guard, which is not part of the application. Automated checks do not replace manual audio tests or establish fresh-install or long-term reliability.
+
+The validated suites contain **242 Python tests** and **32 browser TTS regression tests**. The latter use Node.js's built-in test runner with mocked browser speech APIs and no npm packages:
+
+```powershell
+node --test tests/test_browser_tts.cjs
+```
 
 ## Optional speech and audio
 
@@ -175,7 +182,8 @@ Text chat and structured-learning APIs can run without these optional packages o
 | --- | --- | --- |
 | Server transcription | `faster-whisper` plus an available compatible model | Package/native import checked in the audit environment; microphone capture and real transcription not validated |
 | Local tutor TTS | `piper-tts` plus a voice `.onnx` and matching `.onnx.json` | Piper was absent in the audit environment; adapter tests used mocks |
-| Browser speech | Compatible browser, microphone permissions and available voices | Browser-dependent; speech recognition may use a vendor's external service |
+| Browser tutor playback | Browser speech synthesis and an available German system/browser voice | Manually tested on Windows; exact matches are retained, otherwise a German voice is selected. Requested gender is preferred when identifiable but is not guaranteed |
+| Browser dictation | Compatible browser, microphone permission and a secure context where required | Microphone transcription is not validated end to end; recognition may use a vendor's external service |
 | Mock-exam audio | Windows PowerShell/System.Speech and a suitable installed voice | Optional helper; disabled by `MOCK_AUDIO_PROVIDER=none` in the example; playback not validated |
 
 Install an optional Python package only when deliberately enabling that feature, for example:
@@ -187,6 +195,8 @@ Install an optional Python package only when deliberately enabling that feature,
 ```
 
 These commands install libraries, not speech assets. For offline transcription, set `LOCAL_TRANSCRIBE_MODEL` to an existing local Faster Whisper model directory and use `HF_HUB_OFFLINE=1`. A short model identifier such as the example's `base` may trigger a download on first transcription if it is not cached. Piper paths are documented in `.env.example`; model and voice files are not bundled. If audio is unavailable, use text input; browser fallback availability is not guaranteed.
+
+Android/mobile layouts and audio workflows are not validated or optimized. The tested Android browser exposed no compatible German TTS voice. Accessing the app from another device over an insecure LAN HTTP connection may block microphone access, as observed during mobile testing. Browser playback can require a user tap on **Letzte Antwort**; missing voices or blocked playback are reported in the interface.
 
 ## Assessment and model limitations
 

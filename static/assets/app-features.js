@@ -732,6 +732,7 @@ window.buildChatVoiceCatalog = function buildChatVoiceCatalog() {
   if (!chatBrowserSpeechSupported()) return [];
   const voices = window.speechSynthesis.getVoices() || [];
   return voices
+    .filter((voice) => /^de(?:-|$)/i.test(String(voice.lang || "")))
     .map((voice) => {
       const regionMeta = getChatVoiceRegionMeta(voice);
       if (!regionMeta) return null;
@@ -849,12 +850,12 @@ window.getTutorBrowserVoiceInventory = function getTutorBrowserVoiceInventory() 
 window.resolveTutorBrowserVoice = function resolveTutorBrowserVoice(identityKey = state.chatVoiceGender) {
   const resolvedIdentity = typeof window.normalizeTutorIdentityKey === "function"
     ? window.normalizeTutorIdentityKey(identityKey)
-    : String(identityKey || "").trim().toLowerCase() === "man"
+    : ["man", "male"].includes(String(identityKey || "").trim().toLowerCase())
       ? "man"
       : "woman";
-  const catalog = Array.isArray(state.chatVoiceCatalog) && state.chatVoiceCatalog.length
-    ? state.chatVoiceCatalog
-    : buildChatVoiceCatalog();
+  // Browser voice lists can arrive late or change after system settings change.
+  const catalog = buildChatVoiceCatalog();
+  state.chatVoiceCatalog = catalog;
   const exactCandidates = TUTOR_BROWSER_VOICE_EXACT_MAP[resolvedIdentity] || [];
   for (const candidate of exactCandidates) {
     const match = catalog.find((item) => (
@@ -872,11 +873,12 @@ window.resolveTutorBrowserVoice = function resolveTutorBrowserVoice(identityKey 
     }
   }
   const expectedGender = resolvedIdentity === "man" ? "male" : "female";
+  const fallback = getChatTtsVoice(expectedGender);
   return {
     identity: resolvedIdentity,
-    voiceEntry: null,
-    method: "unresolved",
-    warning: `Keine feste deutsche ${expectedGender === "male" ? "Männerstimme" : "Frauenstimme"} verfügbar.`,
+    voiceEntry: fallback,
+    method: fallback ? "german-language-fallback" : "unresolved",
+    warning: fallback ? "" : "Keine deutsche Systemstimme verfügbar. Aktiviere eine deutsche Stimme in den Spracheinstellungen des Geräts und lade die Seite neu; versuche bei Bedarf einen anderen Browser.",
   };
 };
 
@@ -913,6 +915,10 @@ window.dumpTutorVoiceDebugSnapshot = function dumpTutorVoiceDebugSnapshot() {
 };
 
 window.stopChatSpeech = function stopChatSpeech() {
+  state.chatSpeechPendingText = "";
+  window.clearTimeout(state.chatSpeechVoiceTimer);
+  window.clearTimeout(state.chatSpeechStartTimer);
+  state.chatSpeechUtterance = null;
   if (typeof window.stopTutorAudio === "function") {
     window.stopTutorAudio({ cancelBrowser: false, silent: true });
   }
@@ -949,7 +955,7 @@ window.refreshChatVoiceControls = function refreshChatVoiceControls() {
     }
     els.chatVoiceSummary.textContent = localAvailable
       ? `${localSummary} Zusätzliche Systemstimme nicht verfügbar.`
-      : "Auf diesem Gerät ist keine Wiedergabe verfügbar.";
+      : "Dieser Browser unterstützt keine Sprachausgabe. Versuche einen Browser mit System-Sprachausgabe.";
     if (els.chatReplayBtn) {
       const tutorAudioSupported = typeof window.tutorAudioSupported === "function"
         ? window.tutorAudioSupported()
@@ -964,9 +970,10 @@ window.refreshChatVoiceControls = function refreshChatVoiceControls() {
       els.chatVoiceRegion.innerHTML = "<option value='de-DE'>Hochdeutsch</option>";
       els.chatVoiceRegion.disabled = true;
     }
-    els.chatVoiceSummary.textContent = localAvailable
-      ? `${localSummary} Systemstimme wird vorbereitet.`
-      : "Systemstimme wird vorbereitet.";
+    const browserSummary = state.chatTtsVoiceLoadFailed || window.speechSynthesis.getVoices().length
+      ? "Keine deutsche Systemstimme verfügbar. Aktiviere Deutsch in den Spracheinstellungen des Geräts und lade die Seite neu; versuche bei Bedarf einen anderen Browser."
+      : "Systemstimmen werden geladen. Tippe danach auf „Letzte Antwort“.";
+    els.chatVoiceSummary.textContent = localAvailable ? `${localSummary} ${browserSummary}` : browserSummary;
     if (els.chatReplayBtn) els.chatReplayBtn.disabled = !state.chatTtsEnabled || !state.chatLastAssistantReply;
     return;
   }
@@ -1052,15 +1059,28 @@ window.bindChatTtsVoices = function bindChatTtsVoices() {
   if (state.chatTtsVoicesBound) return;
   const syncVoices = () => {
     state.chatVoiceCatalog = buildChatVoiceCatalog() || [];
+    if (state.chatVoiceCatalog.length) state.chatTtsVoiceLoadFailed = false;
     refreshChatTtsUi();
     updateChatComposerState();
+    if (state.chatVoiceCatalog.length && state.chatSpeechPendingText && state.chatTtsEnabled) {
+      speakChatReply(state.chatSpeechPendingText);
+    }
   };
 
   state.chatTtsVoicesBound = true;
-  syncVoices();
-  if ("onvoiceschanged" in window.speechSynthesis) {
-    window.speechSynthesis.onvoiceschanged = () => syncVoices();
+  if (typeof window.speechSynthesis.addEventListener === "function") {
+    window.speechSynthesis.addEventListener("voiceschanged", syncVoices);
+  } else {
+    const previousHandler = window.speechSynthesis.onvoiceschanged;
+    window.speechSynthesis.onvoiceschanged = (event) => {
+      try {
+        if (typeof previousHandler === "function") previousHandler.call(window.speechSynthesis, event);
+      } finally {
+        syncVoices();
+      }
+    };
   }
+  syncVoices();
 };
 
 window.toggleChatTts = function toggleChatTts() {
@@ -1068,7 +1088,7 @@ window.toggleChatTts = function toggleChatTts() {
     ? window.tutorAudioSupported()
     : chatSpeechSupported();
   if (!tutorAudioSupported) {
-    els.chatVoiceStatus.textContent = "Wiedergabe ist nicht verfügbar.";
+    els.chatVoiceStatus.textContent = "Dieser Browser unterstützt keine Sprachausgabe. Versuche einen Browser mit System-Sprachausgabe.";
     refreshChatTtsUi();
     return;
   }
@@ -1097,9 +1117,15 @@ window.repeatLastChatReply = function repeatLastChatReply() {
 };
 
 window.speakChatReply = function speakChatReply(text) {
-  if (!state.chatTtsEnabled || !chatBrowserSpeechSupported() || !String(text || "").trim()) return;
+  if (!state.chatTtsEnabled || !String(text || "").trim()) return;
+  if (!chatBrowserSpeechSupported()) {
+    els.chatVoiceStatus.textContent = "Dieser Browser unterstützt keine Sprachausgabe. Versuche einen Browser mit System-Sprachausgabe.";
+    refreshChatTtsUi();
+    return;
+  }
   state.chatLastAssistantReply = String(text).trim();
   stopChatSpeech();
+  bindChatTtsVoices();
   const visibleIdentity = typeof window.getTutorVoicePersonaKey === "function"
     ? window.getTutorVoicePersonaKey()
     : (state.chatVoiceGender === "male" ? "man" : "woman");
@@ -1115,6 +1141,18 @@ window.speakChatReply = function speakChatReply(text) {
     : { voiceEntry: null, method: "unresolved", warning: "Keine passende Systemstimme verfügbar." };
   const voiceEntry = browserResolution?.voiceEntry || null;
   if (!voiceEntry?.voice) {
+    if (!window.speechSynthesis.getVoices().length && !state.chatTtsVoiceLoadFailed) {
+      state.chatSpeechPendingText = state.chatLastAssistantReply;
+      els.chatVoiceStatus.textContent = "Systemstimmen werden geladen. Falls nötig, tippe danach erneut auf „Letzte Antwort“.";
+      state.chatSpeechVoiceTimer = window.setTimeout(() => {
+        const pendingText = state.chatSpeechPendingText;
+        state.chatSpeechPendingText = "";
+        state.chatTtsVoiceLoadFailed = true;
+        if (pendingText && state.chatTtsEnabled) speakChatReply(pendingText);
+      }, 3000);
+      refreshChatTtsUi();
+      return;
+    }
     const warningMessage = browserResolution?.warning || "Keine passende Systemstimme verfügbar.";
     window.logTutorIdentityVoiceDebug?.("browser-fallback-unavailable", {
       visibleIdentity,
@@ -1132,7 +1170,11 @@ window.speakChatReply = function speakChatReply(text) {
   if (voiceEntry?.voice) utterance.voice = voiceEntry.voice;
   utterance.rate = voiceEntry?.isRegional ? 0.94 : 0.96;
   utterance.pitch = personaVoiceGender === "male" ? 0.95 : personaVoiceGender === "female" ? 1.02 : 1;
+  // Retain the utterance while mobile browsers dispatch asynchronous events.
+  state.chatSpeechUtterance = utterance;
   utterance.onstart = () => {
+    if (state.chatSpeechUtterance !== utterance) return;
+    window.clearTimeout(state.chatSpeechStartTimer);
     window.logTutorIdentityVoiceDebug?.("browser-fallback-start", {
       visibleIdentity,
       outgoingTtsPersonaKey: outgoingPersonaKey,
@@ -1163,6 +1205,9 @@ window.speakChatReply = function speakChatReply(text) {
     els.chatVoiceStatus.textContent = `Wiedergabe: ${describeChatTtsVoice(voiceEntry)}.`;
   };
   utterance.onend = () => {
+    if (state.chatSpeechUtterance !== utterance) return;
+    window.clearTimeout(state.chatSpeechStartTimer);
+    state.chatSpeechUtterance = null;
     state.tutorAudio.mode = "idle";
     state.tutorAudio.turnId = null;
     state.tutorAudio.queueDepth = 0;
@@ -1173,7 +1218,10 @@ window.speakChatReply = function speakChatReply(text) {
     els.chatVoiceStatus.textContent = "Wiedergabe bereit.";
     refreshChatTtsUi();
   };
-  utterance.onerror = () => {
+  utterance.onerror = (event) => {
+    if (state.chatSpeechUtterance !== utterance) return;
+    window.clearTimeout(state.chatSpeechStartTimer);
+    state.chatSpeechUtterance = null;
     state.tutorAudio.mode = "idle";
     state.tutorAudio.turnId = null;
     state.tutorAudio.queueDepth = 0;
@@ -1181,10 +1229,23 @@ window.speakChatReply = function speakChatReply(text) {
     state.tutorAudio.fallbackInUse = false;
     window.stopTutorAvatarFallbackPulse?.();
     window.syncTutorAvatarPresentation?.();
-    els.chatVoiceStatus.textContent = "Wiedergabe nicht möglich.";
+    const error = event?.error || "unbekannt";
+    els.chatVoiceStatus.textContent = error === "not-allowed"
+      ? "Sprachausgabe wurde vom Browser blockiert. Tippe auf „Letzte Antwort“ und erlaube die Audiowiedergabe im Browser."
+      : `Sprachausgabe fehlgeschlagen (${error}). Prüfe die deutsche Systemstimme und die Medienlautstärke; tippe erneut auf „Letzte Antwort“.`;
     refreshChatTtsUi();
   };
-  window.speechSynthesis.speak(utterance);
+  state.chatSpeechStartTimer = window.setTimeout(() => {
+    if (state.chatSpeechUtterance !== utterance) return;
+    els.chatVoiceStatus.textContent = "Der Browser hat die Sprachausgabe noch nicht gestartet. Tippe auf „Letzte Antwort“; prüfe die Audiofreigabe und die Medienlautstärke.";
+  }, 5000);
+  try {
+    if (window.speechSynthesis.paused) window.speechSynthesis.resume();
+    // Do not await here: replay must reach speak() within the user's click.
+    window.speechSynthesis.speak(utterance);
+  } catch (error) {
+    utterance.onerror({ error: error?.name || "synthesis-failed" });
+  }
   refreshChatTtsUi();
 };
 
