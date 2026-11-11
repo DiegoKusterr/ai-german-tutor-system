@@ -11,13 +11,13 @@ from .common import (
     build_error_insight,
     build_study_plan,
     current_recommendation_strategy,
-    level_rank,
     save_recommendation_event,
     today_iso,
 )
 
 EXAM_MODULES = {"lesen", "hoeren", "schreiben", "sprechen"}
 MODULE_LABELS = {"lesen": "Lesen", "hoeren": "Hören", "schreiben": "Schreiben", "sprechen": "Sprechen"}
+READINESS_NOTE = "Heuristischer Übungsindikator; keine validierte Bestehenswahrscheinlichkeit."
 FIXED_PATH_SEQUENCE: list[tuple[str | None, str]] = [
     ("lesen", "module"),
     ("hoeren", "module"),
@@ -115,7 +115,7 @@ def _build_probability_stat(
             trend_bonus=trend_bonus,
         )
         basis = "empirisch" if len(scores) >= 2 else "geschaetzt"
-        note = f"{len(scores)} Prüfungsversuche · Schnitt {average_percent}% · {trend_note}"
+        note = f"{len(scores)} Prüfungsversuche · Schnitt {average_percent}% · {trend_note} {READINESS_NOTE}"
         return PassProbabilityStat(
             label=label,
             module=module,
@@ -136,7 +136,7 @@ def _build_probability_stat(
             average_percent=round(inferred_percent, 1),
             basis="geschaetzt",
             status=_probability_status(probability_percent),
-            note=note_hint or "Geschätzt aus Einstufung und vorhandenen Teilsignalen.",
+            note=f"{note_hint or 'Geschätzt aus vorhandenen Prüfungsmodulen.'} {READINESS_NOTE}",
         )
     return PassProbabilityStat(
         label=label,
@@ -146,7 +146,7 @@ def _build_probability_stat(
         average_percent=None,
         basis="keine_daten",
         status=_probability_status(None),
-        note=note_hint or "Noch keine belastbare Datenbasis. Starten Sie zuerst eine Gesamtprüfung oder einen Einstufungstest.",
+        note=f"{note_hint or 'Noch keine Prüfungsdaten auf dem Zielniveau vorhanden.'} {READINESS_NOTE}",
     )
 
 
@@ -346,15 +346,17 @@ def _fixed_path_recommendation(
 
 
 def get_progress_overview(goal: str) -> ProgressOverviewPayload:
+    target_level = _goal_level(goal)
     with connection_scope() as conn:
         due_flashcards = conn.execute("SELECT COUNT(*) FROM cards WHERE due_date <= ?", (today_iso(),)).fetchone()[0]
         exam_attempt_rows = conn.execute(
             """
             SELECT module, percent, created_at
             FROM attempts
-            WHERE category = 'exam'
+            WHERE category = 'exam' AND level = ?
             ORDER BY created_at DESC
-            """
+            """,
+            (target_level,),
         ).fetchall()
         skill_rows = conn.execute(
             """
@@ -369,13 +371,15 @@ def get_progress_overview(goal: str) -> ProgressOverviewPayload:
             """
             SELECT module, AVG(percent) AS average_percent, COUNT(*) AS attempts
             FROM attempts
-            WHERE category = 'exam' AND module IN ('lesen', 'hoeren', 'schreiben', 'sprechen')
+            WHERE category = 'exam' AND level = ? AND module IN ('lesen', 'hoeren', 'schreiben', 'sprechen')
             GROUP BY module
             ORDER BY average_percent ASC, attempts DESC
-            """
+            """,
+            (target_level,),
         ).fetchall()
         exam_summary = conn.execute(
-            "SELECT AVG(percent) AS average_percent, COUNT(*) AS attempts FROM attempts WHERE category = 'exam'"
+            "SELECT AVG(percent) AS average_percent, COUNT(*) AS attempts FROM attempts WHERE category = 'exam' AND level = ?",
+            (target_level,),
         ).fetchone()
         weak_skills = [
             SkillStat(
@@ -405,9 +409,6 @@ def get_progress_overview(goal: str) -> ProgressOverviewPayload:
     if exam_skill_rows:
         priority_module = str(exam_skill_rows[0]["module"])
         priority_module_score = round(float(exam_skill_rows[0]["average_percent"] or 0.0), 1)
-    elif weak_skills and weak_skills[0].skill in EXAM_MODULES:
-        priority_module = weak_skills[0].skill
-        priority_module_score = weak_skills[0].average_percent
 
     exam_attempts = int(exam_summary["attempts"] or 0) if exam_summary else 0
     exam_average = round(float(exam_summary["average_percent"] or 0.0), 1) if exam_summary else 0.0
@@ -425,22 +426,12 @@ def get_progress_overview(goal: str) -> ProgressOverviewPayload:
     for row in exam_attempt_rows:
         attempt_scores.setdefault(str(row["module"]), []).append(float(row["percent"]))
 
-    placement_by_module = {
-        item.skill: float(item.percent)
-        for item in (placement_payload.skill_estimates if placement_payload else [])
-        if item.skill in EXAM_MODULES
-    }
     module_probabilities = [
         _build_probability_stat(
             label=_module_label(module),
             module=module,
             scores=attempt_scores.get(module, []),
-            inferred_percent=placement_by_module.get(module),
-            note_hint=(
-                f"Geschätzt aus dem letzten Einstufungstest für { _module_label(module) }."
-                if module in placement_by_module
-                else ""
-            ),
+            note_hint=f"Noch keine Modulprüfung für {_module_label(module)} auf Niveau {target_level}.",
         )
         for module in ("lesen", "hoeren", "schreiben", "sprechen")
     ]
@@ -452,12 +443,10 @@ def get_progress_overview(goal: str) -> ProgressOverviewPayload:
         module_averages = [item.average_percent for item in module_probabilities if item.average_percent is not None]
         if module_averages:
             inferred_full_percent = round((sum(module_averages) / len(module_averages)) * 0.7 + (min(module_averages) * 0.3), 1)
-            inferred_full_note = "Geschätzt aus den verfügbaren Modulwerten; die schwächste Teilprüfung wird dabei bewusst stärker gewichtet."
-        elif placement_payload:
-            target_level = _goal_level(goal)
-            level_gap = level_rank(placement_payload.overall_level) - level_rank(target_level)
-            inferred_full_percent = {1: 74.0, 0: 66.0, -1: 49.0}.get(level_gap, 36.0 if level_gap < -1 else 82.0)
-            inferred_full_note = "Geschätzt aus dem letzten Einstufungstest, weil noch keine vollständige Gesamtprüfung vorliegt."
+            inferred_full_note = (
+                f"Geschätzt aus {len(module_averages)}/4 Prüfungsmodulen auf Niveau {target_level}; "
+                "unvollständige Modulabdeckung bleibt eine eingeschränkte Datenbasis."
+            )
 
     full_exam_probability = _build_probability_stat(
         label="Gesamtprüfung",
@@ -482,6 +471,7 @@ def get_progress_overview(goal: str) -> ProgressOverviewPayload:
             top_errors=top_errors,
         )
 
+    exam_readiness = f"{READINESS_NOTE} Zielniveau {target_level}. {exam_readiness}"
     next_action = next_session.action if next_session else exam_readiness
     recommendation_event_id = save_recommendation_event(
         source="progress_overview",

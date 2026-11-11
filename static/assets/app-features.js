@@ -2057,7 +2057,7 @@ window.gradeWriting = async function gradeWriting() {
       explanation_language: state.settings?.explanation_language || "es",
     }),
   });
-  els.writingResults.innerHTML = `<p><strong>${escapeHtml(payload.total_score)} / ${escapeHtml(payload.max_score)} · ${escapeHtml(payload.percent)}%</strong></p><div class="soft-panel">${escapeHtml(payload.corrected_version).replace(/\n/g, "<br />")}</div><ul class="simple-list">${(payload.rubric || []).map((item) => `<li><strong>${escapeHtml(item.criterion)}</strong>: ${escapeHtml(item.score)} / ${escapeHtml(item.max_score)} · ${escapeHtml(item.comment)}</li>`).join("")}</ul>`;
+  els.writingResults.innerHTML = `<p class="muted">Heuristische Textbewertung · keine validierte CEFR- oder Prüfungsbewertung.</p><p><strong>${escapeHtml(payload.total_score)} / ${escapeHtml(payload.max_score)} · ${escapeHtml(payload.percent)}%</strong></p><div class="soft-panel">${escapeHtml(payload.corrected_version).replace(/\n/g, "<br />")}</div><ul class="simple-list">${(payload.rubric || []).map((item) => `<li><strong>${escapeHtml(item.criterion)}</strong>: ${escapeHtml(item.score)} / ${escapeHtml(item.max_score)} · ${escapeHtml(item.comment)}</li>`).join("")}</ul>`;
   refreshProgress();
 };
 
@@ -2332,8 +2332,8 @@ window.refreshProgress = async function refreshProgress() {
   state.progressOverview = overview;
   state.progressMistakes = mistakes?.mistakes || [];
   const probabilityBasisLabels = {
-    empirisch: "aus Prüfungen",
-    geschaetzt: "Schätzung",
+    empirisch: "aus Übungsprüfungen (heuristisch)",
+    geschaetzt: "heuristische Schätzung",
     keine_daten: "noch keine Daten",
   };
   const skillLabels = { lesen: "Lesen", hoeren: "Hören", schreiben: "Schreiben", sprechen: "Sprechen" };
@@ -2350,7 +2350,7 @@ window.refreshProgress = async function refreshProgress() {
     .filter(Boolean)
     .map((item) => {
       const probability = item.probability_percent == null ? null : Number(item.probability_percent);
-      const probabilityLabel = probability == null ? "Noch offen" : `${probability}%`;
+      const probabilityLabel = probability == null ? "Noch offen" : `${probability}% (heuristisch)`;
       const width = probability == null ? 0 : Math.max(6, Math.min(probability, 100));
       const metaParts = [
         probabilityBasisLabels[item.basis] || item.basis,
@@ -2371,7 +2371,7 @@ window.refreshProgress = async function refreshProgress() {
     .join("");
   els.metricDue.textContent = overview.due_flashcards ?? "-";
   els.metricStreak.textContent = overview.streak_days ? `${overview.streak_days} Tage` : "0 Tage";
-  els.progressProbabilities.innerHTML = passProbabilityCards || "<p class='empty'>Noch keine Daten zur Bestehenschance vorhanden.</p>";
+  els.progressProbabilities.innerHTML = passProbabilityCards || "<p class='empty'>Noch keine Daten zum heuristischen Übungsindikator vorhanden.</p>";
   els.progressSkills.innerHTML = (overview.weak_skills || []).map((skill) => `<div class="skill-row"><div><strong>${escapeHtml(skillLabels[skill.skill] || skill.skill)}</strong> · ${escapeHtml(skill.average_percent)}% · ${escapeHtml(skill.attempts)} Versuche</div><div class="bar-track"><div class="bar-fill" style="width: ${Math.min(Number(skill.average_percent || 0), 100)}%"></div></div></div>`).join("") || "<p class='empty'>Noch zu wenig Daten vorhanden.</p>";
   els.progressPlan.innerHTML = (overview.weekly_plan || []).map((item) => `<article class="list-item"><strong>${escapeHtml(item.title)}</strong><p>${escapeHtml(item.action)}</p></article>`).join("") || "Noch kein Plan vorhanden.";
   els.progressMistakes.innerHTML = (mistakes.mistakes || []).map((item) => `<article class="list-item"><strong>${escapeHtml(item.label)}</strong><p>${escapeHtml(item.description)}</p><p class="muted">${escapeHtml(item.example)}</p></article>`).join("") || "<p class='empty'>Noch keine häufigen Fehler erkannt.</p>";
@@ -2406,8 +2406,8 @@ window.renderHome = function renderHome() {
   const activeRoadmap = overview.active_roadmap || null;
   const coachBrief = [
     {
-      title: "Pass signal",
-      copy: probability == null ? "No full exam probability yet. Run more tracked work." : `${probability}% current full-exam probability.`,
+      title: "Heuristic practice indicator",
+      copy: probability == null ? "No target-level exam evidence yet." : `${probability}% heuristic indicator; not a validated exam pass probability.`,
     },
     {
       title: "Weakest focus",
@@ -4578,9 +4578,9 @@ window.renderHome = function renderHome() {
     : Math.min(100, Math.max(18, Number(probability) || 0));
   const coachBrief = [
     {
-      label: "Bestehenssignal",
+      label: "Heuristisches Übungssignal",
       value: probability == null ? "Im Aufbau" : `${probability}%`,
-      copy: probability == null ? "Mehr bewertete Arbeit schärft das Signal." : "Aktuelle Einschätzung auf Basis gespeicherter Ergebnisse.",
+      copy: probability == null ? "Noch keine Prüfungsdaten auf dem Zielniveau." : "Heuristische Einschätzung; keine validierte Prüfungsprognose.",
     },
     {
       label: "Nächster Fokus",

@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import json
 import re
+from collections import Counter
+from math import sqrt
 from time import perf_counter
 from typing import Any
 from urllib.error import HTTPError, URLError
@@ -22,6 +24,7 @@ from ..learning_materials import (
     WRITING_TASKS,
 )
 from ..schemas import (
+    ErrorInsight,
     EvaluationPayload,
     ExamGenerateRequest,
     ExamPart,
@@ -1818,20 +1821,87 @@ def generate_writing_prompt(req: WritingPromptRequest) -> WritingPromptPayload:
     return payload
 
 
+PRACTICE_ASSESSMENT_NOTE = "Heuristische Textbewertung; keine validierte CEFR- oder Prüfungsbewertung."
+PRACTICE_SCORING_VERSION = "practice_heuristic_v2"
+
+
+def _practice_score_limit(text: str, word_target: int) -> tuple[float, list[str]]:
+    """Conservative evidence limits, not a language detector or semantic grader."""
+    words = [_as_ascii_key(word) for word in split_words(text)]
+    placeholders = r"(?:[xz]{2,}|asdf(?:ghjkl)?|qwert[yz]|(?:bla){2,})"
+    if not words or all(re.fullmatch(placeholders, word) for word in words):
+        return 0.0, ["Keine auswertbaren Wörter oder nur Platzhalter erkannt."]
+
+    # A short genuine answer retains partial credit; these are practice targets,
+    # not official exam length requirements.
+    limit = 100.0 * min(1.0, sqrt(len(words) / word_target))
+    reasons: list[str] = []
+    if len(words) < word_target:
+        reasons.append(f"Begrenzte Textbasis: {len(words)}/{word_target} Übungswörter.")
+    sentences = [
+        " ".join(_as_ascii_key(word) for word in split_words(sentence))
+        for sentence in re.split(r"[.!?]+", text)
+        if split_words(sentence)
+    ]
+    repeated_sentences = len(sentences) >= 3 and max(Counter(sentences).values()) / len(sentences) >= 0.7
+    repeated_words = len(words) >= 12 and (
+        len(set(words)) <= 2 or max(Counter(words).values()) / len(words) >= 0.8
+    )
+    if repeated_words or repeated_sentences:
+        limit = min(limit, 25.0)
+        reasons.append("Überwiegend wiederholte Wörter oder Sätze; mehr Länge liefert hier keine zusätzliche Evidenz.")
+    if (
+        len(words) >= 12
+        and not re.search(r"[.!?]", text)
+        and not set(words).intersection(OPEN_RESPONSE_STOPWORDS)
+    ):
+        limit = min(limit, 40.0)
+        reasons.append("Lange Wortfolge ohne Satzzeichen oder einfache Satzsignale; eine Wortliste belegt keine Sprachrichtigkeit.")
+    return round(limit, 1), reasons
+
+
+def _practice_speaking_score(
+    text: str, level: str, *, require_question: bool
+) -> tuple[float, str, list[ErrorInsight], list[str]]:
+    word_target = {"A1": 3, "A2": 6}.get(level, 12)
+    corrected, issues = detect_generic_errors(text, min_words=word_target, require_question=require_question)
+    limit, reasons = _practice_score_limit(text, word_target)
+    score = round(min(max(0.0, 10.0 - len(issues)), limit / 10.0), 2)
+    issues = dedupe_errors(
+        [build_error_insight("aufgabenbezug", text, reason) for reason in reasons] + issues
+    )
+    return score, corrected, issues, reasons
+
+
 def submit_writing(req: WritingGradeRequest) -> WritingGradePayload:
     exercise = get_exercise(req.prompt_id)
     if not exercise:
         raise ValueError("Schreibaufgabe nicht gefunden.")
     prompt = WritingPromptPayload.model_validate(exercise["prompt_json"])
-    corrected_text, issues = detect_generic_errors(req.text, min_words=80 if prompt.level in {"B2", "C1"} else 50)
+    word_target = {"A1": 15, "A2": 25, "B1": 50}.get(prompt.level, 80)
+    corrected_text, issues = detect_generic_errors(req.text, min_words=word_target)
+    score_limit, quality_reasons = _practice_score_limit(req.text, word_target)
+    task_score, task_hints = compute_open_score(
+        req.text, keywords=prompt.suggested_words, max_score=5, min_words=word_target
+    )
     rubric = [
-        RubricScore(criterion="Aufgabenbezug", score=4.0 if len(req.text) > 120 else 3.0, max_score=5.0, comment="Leitpunkte und Aufgabenfokus."),
+        RubricScore(criterion="Aufgabenbezug", score=task_score, max_score=5.0, comment="Formale Textentwicklung und Stichwörter; keine semantische Aufgabenprüfung. " + " ".join(task_hints)),
         RubricScore(criterion="Kommunikative Gestaltung", score=4.0 if "\n" in corrected_text or len(req.text.split(".")) > 2 else 3.0, max_score=5.0, comment="Aufbau, Leseführung und Klarheit."),
-        RubricScore(criterion="Sprachrichtigkeit", score=max(1.0, 5.0 - len(issues) * 0.8), max_score=5.0, comment="Fehlerdichte und formale Sicherheit."),
-        RubricScore(criterion="Wortschatz", score=min(5.0, 2.5 + len(set(req.text.lower().split())) / 35), max_score=5.0, comment="Lexikalische Reichweite und thematische Passung."),
+        RubricScore(criterion="Sprachrichtigkeit", score=max(0.0, 5.0 - len(issues) * 0.8), max_score=5.0, comment="Nur erkannte Fehlermuster; fehlende Treffer beweisen keine korrekte Grammatik."),
+        RubricScore(criterion="Wortschatz", score=min(5.0, len(set(split_words(req.text.lower()))) / max(3.0, word_target / 5)), max_score=5.0, comment="Unterschiedliche Wörter als begrenztes Übungssignal; keine semantische Qualitätsmessung."),
     ]
-    total = sum(item.score for item in rubric)
     max_total = sum(item.max_score for item in rubric)
+    raw_total = sum(item.score for item in rubric)
+    scale = min(1.0, max_total * score_limit / 100 / raw_total) if raw_total else 0.0
+    for item in rubric:
+        item.score = round(item.score * scale, 2)
+        item.comment += " " + PRACTICE_ASSESSMENT_NOTE
+        if quality_reasons:
+            item.comment += " " + " ".join(quality_reasons)
+    total = round(sum(item.score for item in rubric), 2)
+    issues = dedupe_errors(
+        [build_error_insight("aufgabenbezug", req.text, reason) for reason in quality_reasons] + issues
+    )
     percent = round(total / max_total * 100, 1)
     attempt_id = save_attempt(
         exercise_id=req.prompt_id,
@@ -1842,7 +1912,14 @@ def submit_writing(req: WritingGradeRequest) -> WritingGradePayload:
         score=total,
         max_score=max_total,
         percent=percent,
-        feedback_payload={"rubric": [item.model_dump() for item in rubric]},
+        feedback_payload={
+            "rubric": [item.model_dump() for item in rubric],
+            "scoring_version": PRACTICE_SCORING_VERSION,
+            "assessment_note": PRACTICE_ASSESSMENT_NOTE,
+            "word_target": word_target,
+            "score_limit_percent": score_limit,
+            "quality_reasons": quality_reasons,
+        },
         corrected_payload={"corrected_version": corrected_text},
         error_tags_payload=[item.model_dump() for item in issues],
         recommendation_event_id=_exercise_recommendation_event_id(exercise),
@@ -1858,7 +1935,7 @@ def submit_writing(req: WritingGradeRequest) -> WritingGradePayload:
         corrected_version=corrected_text,
         rubric=rubric,
         recurring_errors=issues,
-        what_to_improve=[item.recommendation for item in issues[:4]],
+        what_to_improve=list(dict.fromkeys(quality_reasons + [item.recommendation for item in issues]))[:4],
         tricks=[
             "Planen Sie zuerst Einleitung, Entwicklung und Schluss.",
             "Verwenden Sie mindestens einen Kausal- und einen Konnektor der Folge.",
@@ -1869,7 +1946,7 @@ def submit_writing(req: WritingGradeRequest) -> WritingGradePayload:
             "Schreiben Sie drei neue Sätze mit `weil`, `deshalb` und `obwohl`.",
         ],
         study_plan=build_study_plan([item.tag for item in issues], f"goethe_{prompt.level.lower()}"),
-        official_alignment="Rubrik an veröffentlichte Goethe-Kriterien angelehnt.",
+        official_alignment=PRACTICE_ASSESSMENT_NOTE,
     )
 
 
@@ -1892,7 +1969,7 @@ def generate_speaking_session(req: SpeakingSimulateRequest) -> SpeakingSimulatio
             "Könnten wir vielleicht ...?",
             "Ein wichtiger Punkt ist, dass ...",
         ],
-        official_alignment="Sprechsimulation an veröffentlichten Goethe-Abläufen orientiert.",
+        official_alignment=PRACTICE_ASSESSMENT_NOTE + " Keine Aussprachemessung.",
     )
     now = utc_now_iso()
     with connection_scope() as conn:
@@ -1919,6 +1996,10 @@ def generate_speaking_session(req: SpeakingSimulateRequest) -> SpeakingSimulatio
     return payload
 
 
+class SpeakingSessionCompleteError(ValueError):
+    """A completed speaking session cannot accept another response."""
+
+
 def submit_speaking_turn(req: SpeakingFeedbackRequest) -> SpeakingTurnPayload:
     with connection_scope() as conn:
         row = conn.execute("SELECT * FROM learning_sessions WHERE id = ?", (req.session_id,)).fetchone()
@@ -1926,8 +2007,15 @@ def submit_speaking_turn(req: SpeakingFeedbackRequest) -> SpeakingTurnPayload:
         raise ValueError("Sprechsitzung nicht gefunden.")
     state = json.loads(row["state_json"])
     payload = SpeakingSimulationPayload.model_validate(state["payload"])
-    turn_number = int(state.get("turn", 0)) + 1
-    corrected, issues = detect_generic_errors(req.user_message, min_words=12, require_question=turn_number == 3)
+    completed_turns = int(state.get("turn", 0))
+    if completed_turns >= 3:
+        raise SpeakingSessionCompleteError("Sprechsitzung ist bereits abgeschlossen.")
+    turn_number = completed_turns + 1
+    _, corrected, issues, reasons = _practice_speaking_score(
+        req.user_message, payload.level, require_question=turn_number == 3
+    )
+    feedback = list(dict.fromkeys([issue.description for issue in issues] + reasons))
+    feedback.append(PRACTICE_ASSESSMENT_NOTE + " Keine Aussprachemessung.")
     replies = {
         1: "Danke. Können Sie das noch etwas genauer begründen?",
         2: "Gut. Reagieren Sie jetzt direkt und machen Sie einen konkreten Vorschlag.",
@@ -1959,6 +2047,35 @@ def submit_speaking_turn(req: SpeakingFeedbackRequest) -> SpeakingTurnPayload:
             ),
         )
     if turn_number >= 3:
+        learner_responses = [
+            str(entry.get("text") or "")
+            for entry in transcript
+            if str(entry.get("speaker") or "").strip().lower() == "user"
+        ]
+        turn_scores = []
+        aggregate_issues = []
+        assessment_reasons = []
+        for number, response in enumerate(learner_responses, 1):
+            score, _, response_issues, response_reasons = _practice_speaking_score(
+                response, payload.level, require_question=number == 3
+            )
+            turn_scores.append({"turn": number, "score": score})
+            aggregate_issues.extend(response_issues)
+            assessment_reasons.extend(response_reasons)
+        mean_score = round(sum(item["score"] for item in turn_scores) / len(turn_scores), 2)
+        session_score_limit = 10.0
+        normalized_responses = {" ".join(split_words(response.casefold())) for response in learner_responses}
+        if len(learner_responses) >= 3 and len(normalized_responses) == 1:
+            session_score_limit = 2.5
+            assessment_reasons.append("Dieselbe Antwort wurde in allen Runden wiederholt; keine zusätzliche Gesprächsentwicklung.")
+        final_score = min(mean_score, session_score_limit)
+        final_percent = round(final_score / 10.0 * 100, 1)
+        issues = dedupe_errors(aggregate_issues)
+        feedback = list(dict.fromkeys([issue.description for issue in issues] + assessment_reasons))
+        feedback.extend([
+            PRACTICE_ASSESSMENT_NOTE + " Keine Aussprachemessung.",
+            f"Übungsindikator aus allen {len(turn_scores)} Lernerantworten: {final_score}/10 ({final_percent}%).",
+        ])
         recommendation_event_id = str(state.get("recommendation_event_id") or "").strip() or None
         save_exercise(
             exercise_id=req.session_id,
@@ -1988,10 +2105,17 @@ def submit_speaking_turn(req: SpeakingFeedbackRequest) -> SpeakingTurnPayload:
                 ),
                 "transcript": transcript,
             },
-            score=max(6.0, 10.0 - len(issues)),
+            score=final_score,
             max_score=10.0,
-            percent=max(60.0, 100.0 - len(issues) * 10),
-            feedback_payload={"feedback": [issue.description for issue in issues]},
+            percent=final_percent,
+            feedback_payload={
+                "feedback": feedback,
+                "turn_scores": turn_scores,
+                "mean_turn_score": mean_score,
+                "session_score_limit": session_score_limit,
+                "scoring_version": PRACTICE_SCORING_VERSION,
+                "assessment_note": PRACTICE_ASSESSMENT_NOTE,
+            },
             corrected_payload={"corrected": corrected},
             error_tags_payload=[issue.model_dump() for issue in issues],
             recommendation_event_id=recommendation_event_id,
@@ -2001,7 +2125,7 @@ def submit_speaking_turn(req: SpeakingFeedbackRequest) -> SpeakingTurnPayload:
         turn_number=turn_number,
         examiner_reply=reply_text,
         corrected_version=corrected,
-        turn_feedback=[issue.description for issue in issues] or ["Die Antwort ist verständlich; jetzt noch präziser und besser entwickelt formulieren."],
+        turn_feedback=feedback,
         error_tags=issues,
         is_complete=turn_number >= 3,
         final_recommendation=build_study_plan([issue.tag for issue in issues], f"goethe_{payload.level.lower()}") if turn_number >= 3 else [],

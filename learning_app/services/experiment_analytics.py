@@ -250,6 +250,20 @@ def get_experiment_analytics_overview() -> ExperimentAnalyticsOverviewPayload:
     )
 
 
+def _spreadsheet_safe_cell(value: Any) -> Any:
+    """Neutralize formula-like text at export time; leave numeric values intact."""
+    if not isinstance(value, str):
+        return value
+    offset = 0
+    while offset < len(value) and (
+        value[offset].isspace() or ord(value[offset]) < 32 or value[offset] == "\ufeff"
+    ):
+        offset += 1
+    if value.startswith(("\t", "\r", "\n")) or value[offset:].startswith(("=", "+", "-", "@")):
+        return "'" + value
+    return value
+
+
 def export_experiment_dataset_csv(dataset_key: str) -> tuple[str, str]:
     config = EXPORT_DATASETS.get(dataset_key)
     if not config:
@@ -265,5 +279,5 @@ def export_experiment_dataset_csv(dataset_key: str) -> tuple[str, str]:
     if headers:
         writer.writerow(headers)
         for row in rows:
-            writer.writerow([row[column] for column in headers])
+            writer.writerow([_spreadsheet_safe_cell(row[column]) for column in headers])
     return buffer.getvalue(), f"{config['source_name']}.csv"

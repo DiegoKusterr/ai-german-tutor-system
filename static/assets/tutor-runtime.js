@@ -102,7 +102,7 @@
     return error;
   };
 
-  const commitStreamedTurn = async ({ conversationId, message, reply, level }) => {
+  const commitStreamedTurn = async ({ conversationId, message, reply, level, finishReason }) => {
     const response = await window.fetch(STREAM_COMMIT_ENDPOINT, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -111,6 +111,7 @@
         message,
         reply,
         level,
+        finish_reason: finishReason || null,
       }),
     });
     if (!response.ok) {
@@ -956,6 +957,7 @@
               message: trimmedMessage,
               reply: committedReply,
               level: els.globalLevel.value,
+              finishReason: event.finish_reason,
             });
           } catch (commitError) {
             clearActiveRequestRefs(controller, assistantBubble, { keepPendingBubble: false });
@@ -978,8 +980,10 @@
           clearActiveRequestRefs(controller, assistantBubble, { keepPendingBubble: false });
           window.setTutorSessionState?.("idle", { ...idleSessionPatch });
           window.setChatStatus?.(
-            `Antwort erhalten (${(latencyMs / 1000).toFixed(latencyMs >= 10000 ? 0 : 1)} s).`,
-            "success",
+            event.truncated
+              ? "Antwort am Tokenlimit abgebrochen. Der angezeigte Text wurde gespeichert; bitte um eine Fortsetzung."
+              : `Antwort erhalten (${(latencyMs / 1000).toFixed(latencyMs >= 10000 ? 0 : 1)} s).`,
+            event.truncated ? "warning" : "success",
           );
           completeTutorSpeechTurn(audioRuntime, finalText || assistantText.trim());
           return;

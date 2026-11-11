@@ -27,6 +27,9 @@ from fastapi.responses import FileResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
+# Load .env before project modules capture configuration at import time.
+load_dotenv(override=False)
+
 from local_https import LOCAL_CA_CERT_PATH
 from learning_app.db import init_db as init_learning_db
 from learning_app.router import router as learning_router
@@ -46,7 +49,6 @@ except Exception:  # pragma: no cover - optional local STT dependency
     WhisperModel = None
 
 
-load_dotenv()
 logger = logging.getLogger("german_speaking_coach")
 mimetypes.add_type("image/webp", ".webp")
 
@@ -382,6 +384,8 @@ TutorPersonaKey = Literal["studio", "coach", "examiner"]
 
 class TranscriptEntryMetaDict(TypedDict, total=False):
     source: str
+    finish_reason: str | None
+    truncated: bool
 
 
 class TranscriptEntryDict(TypedDict, total=False):
@@ -507,6 +511,8 @@ class ChatRequest(BaseModel):
 class ChatResponse(BaseModel):
     reply: str
     conversation_id: str
+    finish_reason: str | None = None
+    truncated: bool = False
 
 
 class FinishRequest(BaseModel):
@@ -518,6 +524,7 @@ class TutorStreamCommitRequest(BaseModel):
     message: str = Field(min_length=1, max_length=2000)
     reply: str = Field(min_length=1)
     level: str = Field(default=DEFAULT_LEVEL, pattern=LEVEL_PATTERN)
+    finish_reason: str | None = Field(default=None, max_length=40)
 
 
 class TutorTtsRequest(BaseModel):
@@ -763,10 +770,16 @@ class ConversationSummary(BaseModel):
     preview: str
 
 
+DEFAULT_LOCAL_ORIGINS = [
+    "http://127.0.0.1:8000", "http://localhost:8000",
+    "https://127.0.0.1:8443", "https://localhost:8443",
+]
+
+
 def parse_allowed_origins() -> list[str]:
-    raw_origins = os.getenv("ALLOWED_ORIGINS", "*")
+    raw_origins = os.getenv("ALLOWED_ORIGINS", "")
     origins = [origin.strip() for origin in raw_origins.split(",") if origin.strip()]
-    return origins or ["*"]
+    return origins or list(DEFAULT_LOCAL_ORIGINS)
 
 
 def utc_now_iso() -> str:
@@ -1475,7 +1488,8 @@ def _parse_session_state(raw_session: Any) -> SessionState | None:
                     "version_index": version_index,
                     "edited_from_id": _clean_optional_str(item.get("edited_from_id")),
                     "invalidated_by_id": _clean_optional_str(item.get("invalidated_by_id")),
-                    "meta": {"source": meta_source},
+                    "meta": {"source": meta_source, **completion_metadata(raw_meta.get("finish_reason"))}
+                    if isinstance(raw_meta, dict) and "finish_reason" in raw_meta else {"source": meta_source},
                 }
                 transcript.append(last_user_entry)
             else:
@@ -1499,7 +1513,8 @@ def _parse_session_state(raw_session: Any) -> SessionState | None:
                         "version_index": version_index,
                         "edited_from_id": _clean_optional_str(item.get("edited_from_id")),
                         "invalidated_by_id": _clean_optional_str(item.get("invalidated_by_id")),
-                        "meta": {"source": meta_source},
+                        "meta": {"source": meta_source, **completion_metadata(raw_meta.get("finish_reason"))}
+                        if isinstance(raw_meta, dict) and "finish_reason" in raw_meta else {"source": meta_source},
                     }
                 )
             next_version_group_index = max(next_version_group_index, _version_group_counter_seed(version_group_id) + 1)
@@ -1707,6 +1722,7 @@ def append_transcript(
     invalidated_by_id: str | None = None,
     meta_source: str = "blocking",
     update_profile: bool = True,
+    finish_reason: str | None = None,
 ) -> TranscriptEntryDict | None:
     clean_text = text.strip()
     if not clean_text:
@@ -1735,6 +1751,8 @@ def append_transcript(
             invalidated_by_id=invalidated_by_id,
             meta_source=meta_source,
         )
+        if finish_reason is not None:
+            entry["meta"].update(completion_metadata(finish_reason))
         _append_transcript_entry_locked(session, entry)
     if role == "user" and update_profile:
         update_learner_profile_from_user_turn(clean_text)
@@ -2525,7 +2543,7 @@ def strip_leading_chat_filler(text: str) -> str:
 
 
 def split_reply_sentences(text: str) -> list[str]:
-    return [item.strip() for item in re.split(r"(?<=[.!?])\s+", str(text or "").strip()) if item.strip()]
+    return [item.strip() for item in re.split(r'(?<=[.!?])\s+|(?<=[.!?]["”’“»«])\s+', str(text or "").strip()) if item.strip()]
 
 
 def expand_reply_sentence_clauses(sentences: list[str]) -> list[str]:
@@ -2944,21 +2962,38 @@ def finalize_assistant_reply(text: str, constraints: ChatReplyConstraints | None
         if cleaned and cleaned[-1] not in ".!?":
             cleaned += "."
 
-    if cleaned and cleaned[-1] not in ".!?":
-        last_punct = max(cleaned.rfind("."), cleaned.rfind("?"), cleaned.rfind("!"))
-        if last_punct >= 15:
-            cleaned = cleaned[: last_punct + 1].strip()
-        elif sentence_limit <= 1 or constraints.concise:
-            cleaned = cleaned.rstrip(",;:") + "."
+    # Preserve quotation marks and incomplete tails; punctuation is not proof
+    # that a model finished. Native Ollama replies bypass these style limits.
     return cleaned
 
 
-def split_complete_assistant_sentences(text: str, constraints: ChatReplyConstraints | None = None) -> list[str]:
-    finalized = finalize_assistant_reply(text, constraints=constraints)
-    if not finalized:
+def split_complete_assistant_sentences(
+    text: str, constraints: ChatReplyConstraints | None = None, *, final: bool = True,
+) -> list[str]:
+    if not text.strip():
         return []
-    sentences = split_reply_sentences(finalized)
-    return [item for item in sentences if item and item[-1] in ".!?"]
+    sentences = split_reply_sentences(text)
+    if not final and text and not text[-1].isspace():
+        # A closing quotation mark may arrive in the next chunk.
+        sentences = sentences[:-1]
+    complete = []
+    for sentence in sentences:
+        if not re.search(r'[.!?]["”’“»«]?$', sentence):
+            break
+        unclosed_quotes = (
+            sentence.count('"') % 2
+            or (sentence.count('„') != sentence.count('“') if '„' in sentence else sentence.count('“') != sentence.count('”'))
+            or sentence.count('«') != sentence.count('»')
+        )
+        if unclosed_quotes:
+            break
+        complete.append(sentence)
+    return complete
+
+
+def completion_metadata(finish_reason: Any) -> dict[str, Any]:
+    reason = str(finish_reason).strip() if finish_reason is not None else None
+    return {"finish_reason": reason or None, "truncated": reason == "length"}
 
 
 def detect_assistant_reply_issue(reply: str, user_text: str) -> str | None:
@@ -4951,6 +4986,10 @@ def ollama_chat_options(for_feedback: bool = False) -> dict[str, float | int]:
 
     if OLLAMA_NUM_THREAD > 0:
         options["num_thread"] = OLLAMA_NUM_THREAD
+    if not for_feedback and OLLAMA_SPEED_PRESET == "turbo":
+        options["num_ctx"] = min(int(options["num_ctx"]), 1280)
+        options["temperature"] = min(float(options["temperature"]), 0.45)
+        options["top_p"] = min(float(options["top_p"]), 0.9)
     return options
 
 
@@ -4967,7 +5006,7 @@ def warmup_ollama_once() -> None:
             "stream": False,
             "keep_alive": OLLAMA_KEEP_ALIVE,
             "messages": [{"role": "user", "content": "Hallo!"}],
-            "options": {"num_predict": 1, "temperature": 0.1, "num_ctx": OLLAMA_NUM_CTX},
+            "options": {**ollama_chat_options(for_feedback=False), "num_predict": 1},
         }
         http_post_json(f"{OLLAMA_BASE_URL}/api/chat", payload, timeout=max(120, OLLAMA_REQUEST_TIMEOUT))
         OLLAMA_WARMED = True
@@ -5082,6 +5121,7 @@ def generate_chat_reply(
     transcript: list[TranscriptEntryDict],
     preferred_provider: Literal["ollama", "rulebased"],
     coherence: SessionCoherenceDict | None = None,
+    response_metadata: dict[str, Any] | None = None,
 ) -> tuple[str, Literal["ollama", "rulebased"], str | None]:
     constraints = extract_chat_reply_constraints(message)
     quick_reply = (
@@ -5110,7 +5150,11 @@ def generate_chat_reply(
                     )
                     provider_name = "rulebased"
                 else:
-                    raw_reply = chat_with_ollama(level=level, transcript=transcript, constraints=constraints, coherence=coherence)
+                    model_metadata: dict[str, Any] = {}
+                    raw_reply = chat_with_ollama(
+                        level=level, transcript=transcript, constraints=constraints,
+                        coherence=coherence, response_metadata=model_metadata,
+                    )
             else:
                 raw_reply = rulebased_reply(
                     user_text=message,
@@ -5120,7 +5164,7 @@ def generate_chat_reply(
                     coherence=coherence,
                 )
 
-            final_reply = finalize_assistant_reply(raw_reply, constraints=constraints)
+            final_reply = raw_reply.strip() if provider_name == "ollama" else finalize_assistant_reply(raw_reply, constraints=constraints)
             issue = detect_assistant_reply_issue(final_reply, message)
             if issue:
                 raise RuntimeError(f"reply quality issue: {issue}")
@@ -5136,6 +5180,8 @@ def generate_chat_reply(
             degraded_reason = None
             if provider_name != preferred_provider:
                 degraded_reason = errors[-1] if errors else "fallback"
+            if response_metadata is not None:
+                response_metadata.update(model_metadata if provider_name == "ollama" else completion_metadata(None))
             return final_reply, provider_name, degraded_reason
         except RuntimeError as exc:
             latency_ms = int((perf_counter() - attempt_started) * 1000)
@@ -5167,25 +5213,11 @@ def chat_with_ollama(
     transcript: list[TranscriptEntryDict],
     constraints: ChatReplyConstraints | None = None,
     coherence: SessionCoherenceDict | None = None,
+    response_metadata: dict[str, Any] | None = None,
 ) -> str:
-    prefer_fast = should_prioritize_fast_ollama_chat(transcript)
-    chat_model = pick_ollama_chat_model(prefer_fast=prefer_fast)
-    is_turbo = OLLAMA_SPEED_PRESET == "turbo" or prefer_fast
+    chat_model = pick_ollama_chat_model()
+    is_turbo = OLLAMA_SPEED_PRESET == "turbo"
     options = ollama_chat_options(for_feedback=False)
-    if is_turbo:
-        options["num_predict"] = min(
-            int(options.get("num_predict", OLLAMA_CHAT_MAX_TOKENS)),
-            48,
-        )
-        options["num_ctx"] = min(
-            int(options.get("num_ctx", OLLAMA_NUM_CTX)),
-            1280,
-        )
-        options["temperature"] = min(
-            float(options.get("temperature", OLLAMA_TEMPERATURE)),
-            0.45,
-        )
-        options["top_p"] = min(float(options.get("top_p", OLLAMA_TOP_P)), 0.9)
 
     message_budget = 4 if is_turbo else OLLAMA_MAX_HISTORY_MESSAGES
     payload = {
@@ -5218,6 +5250,11 @@ def chat_with_ollama(
     content = str(message.get("content", "")).strip()
     if not content:
         raise RuntimeError("Ollama returned an empty response.")
+    metadata = completion_metadata(response.get("done_reason"))
+    if response_metadata is not None:
+        response_metadata.update(metadata)
+    if metadata["truncated"]:
+        logger.warning("chat.ollama.truncated model=%s budget=%s", chat_model, options["num_predict"])
     return content
 
 
@@ -5227,24 +5264,9 @@ def open_ollama_chat_stream_response(
     constraints: ChatReplyConstraints | None = None,
     coherence: SessionCoherenceDict | None = None,
 ) -> Any:
-    prefer_fast = should_prioritize_fast_ollama_chat(transcript)
-    chat_model = pick_ollama_chat_model(prefer_fast=prefer_fast)
-    is_turbo = OLLAMA_SPEED_PRESET == "turbo" or prefer_fast
+    chat_model = pick_ollama_chat_model()
+    is_turbo = OLLAMA_SPEED_PRESET == "turbo"
     options = ollama_chat_options(for_feedback=False)
-    if is_turbo:
-        options["num_predict"] = min(
-            int(options.get("num_predict", OLLAMA_CHAT_MAX_TOKENS)),
-            48,
-        )
-        options["num_ctx"] = min(
-            int(options.get("num_ctx", OLLAMA_NUM_CTX)),
-            1280,
-        )
-        options["temperature"] = min(
-            float(options.get("temperature", OLLAMA_TEMPERATURE)),
-            0.45,
-        )
-        options["top_p"] = min(float(options.get("top_p", OLLAMA_TOP_P)), 0.9)
 
     message_budget = 4 if is_turbo else OLLAMA_MAX_HISTORY_MESSAGES
     payload = {
@@ -5381,9 +5403,10 @@ def commit_streamed_tutor_turn(
     level: str,
     message: str,
     reply: str,
+    finish_reason: str | None = None,
 ) -> None:
     clean_message = str(message or "").strip()
-    clean_reply = finalize_assistant_reply(str(reply or "").strip())
+    clean_reply = str(reply or "").strip()
     if not clean_message or not clean_reply:
         raise HTTPException(status_code=400, detail="Message and reply are required to commit a streamed turn.")
 
@@ -5429,6 +5452,7 @@ def commit_streamed_tutor_turn(
         version_group_id=_clean_optional_str(user_entry.get("version_group_id")),
         version_index=int(user_entry.get("version_index") or 1),
         meta_source="streamed",
+        finish_reason=finish_reason,
     )
     if not assistant_entry:
         raise HTTPException(status_code=500, detail="Could not store streamed assistant reply.")
@@ -5773,7 +5797,7 @@ allowed_origins = parse_allowed_origins()
 app.add_middleware(
     CORSMiddleware,
     allow_origins=allowed_origins,
-    allow_credentials="*" not in allowed_origins,
+    allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -5860,6 +5884,7 @@ def chat(req: ChatRequest) -> ChatResponse:
     working_transcript = build_working_chat_transcript(session, message=req.message)
     preview_coherence = build_preview_coherence(session, working_transcript, requested_persona_key=req.persona_key)
     constraints = extract_chat_reply_constraints(req.message)
+    response_metadata: dict[str, Any] = completion_metadata(None)
 
     try:
         assistant_reply, provider_used, degraded_reason = generate_chat_reply(
@@ -5868,6 +5893,7 @@ def chat(req: ChatRequest) -> ChatResponse:
             transcript=working_transcript,
             preferred_provider=preferred_provider,
             coherence=preview_coherence,
+            response_metadata=response_metadata,
         )
     except RuntimeError as exc:
         raise HTTPException(status_code=502, detail=str(exc)) from exc
@@ -5877,7 +5903,8 @@ def chat(req: ChatRequest) -> ChatResponse:
             "Entschuldigung, ich habe dich nicht gut verstanden. "
             "Kannst du es bitte noch einmal sagen?"
         )
-    assistant_reply = finalize_assistant_reply(assistant_reply, constraints=constraints)
+    if provider_used != "ollama":
+        assistant_reply = finalize_assistant_reply(assistant_reply, constraints=constraints)
 
     user_entry = append_transcript(conv_id, req.level, "user", req.message, meta_source="blocking")
     if not user_entry:
@@ -5891,6 +5918,7 @@ def chat(req: ChatRequest) -> ChatResponse:
         version_group_id=_clean_optional_str(user_entry.get("version_group_id")),
         version_index=int(user_entry.get("version_index") or 1),
         meta_source="blocking",
+        finish_reason=response_metadata["finish_reason"],
     )
     if not assistant_entry:
         raise HTTPException(status_code=500, detail="Could not store assistant reply.")
@@ -5905,7 +5933,7 @@ def chat(req: ChatRequest) -> ChatResponse:
         total_ms,
         degraded_reason or "-",
     )
-    return ChatResponse(reply=assistant_reply, conversation_id=conv_id)
+    return ChatResponse(reply=assistant_reply, conversation_id=conv_id, **response_metadata)
 
 
 @app.post("/api/chat", response_model=ApiChatResponse)
@@ -5925,6 +5953,8 @@ def api_chat(req: ApiChatRequest) -> ApiChatResponse:
         mode=req.mode,
         correction=correction,
         tips=tips,
+        finish_reason=legacy_response.finish_reason,
+        truncated=legacy_response.truncated,
     )
 
 
@@ -5949,6 +5979,7 @@ async def api_tutor_chat_stream(req: TutorStreamRequest, request: FastAPIRequest
         tips: list[str] = []
         stream_started = False
         completed_normally = False
+        finish_reason: str | None = None
 
         async def client_disconnected() -> bool:
             return await request.is_disconnected()
@@ -6048,6 +6079,10 @@ async def api_tutor_chat_stream(req: TutorStreamRequest, request: FastAPIRequest
                                 if await client_disconnected():
                                     log_stream_interrupted("during_model_stream")
                                     return
+                                if payload.get("error"):
+                                    raise RuntimeError(str(payload["error"]))
+                                if payload.get("done"):
+                                    finish_reason = completion_metadata(payload.get("done_reason"))["finish_reason"]
                                 message_payload = payload.get("message", {})
                                 chunk_text = str(message_payload.get("content", "") or "")
                                 if chunk_text:
@@ -6059,7 +6094,7 @@ async def api_tutor_chat_stream(req: TutorStreamRequest, request: FastAPIRequest
                                             return
                                     reply_chunks.append(chunk_text)
                                     yield encode_tutor_stream_event("delta", text=chunk_text)
-                                    authoritative_sentences = split_complete_assistant_sentences("".join(reply_chunks).strip(), constraints=constraints)
+                                    authoritative_sentences = split_complete_assistant_sentences("".join(reply_chunks), final=False)
                                     if emitted_authoritative_sentences and (
                                         authoritative_sentences[: len(emitted_authoritative_sentences)] != emitted_authoritative_sentences
                                     ):
@@ -6077,9 +6112,16 @@ async def api_tutor_chat_stream(req: TutorStreamRequest, request: FastAPIRequest
                                         if await client_disconnected():
                                             log_stream_interrupted("after_sentence_event")
                                             return
-                        final_reply = finalize_assistant_reply("".join(reply_chunks).strip(), constraints=constraints)
+                        final_reply = "".join(reply_chunks).strip()
                         if not final_reply:
                             raise RuntimeError("Ollama returned an empty streamed response.")
+                        for sentence_text in split_complete_assistant_sentences(final_reply)[len(emitted_authoritative_sentences):]:
+                            sentence_index = len(emitted_authoritative_sentences)
+                            emitted_authoritative_sentences.append(sentence_text)
+                            yield encode_tutor_stream_event("sentence", text=sentence_text, sentence_index=sentence_index)
+                            if await client_disconnected():
+                                log_stream_interrupted("after_final_sentence_event")
+                                return
 
             if await client_disconnected():
                 log_stream_interrupted("before_final_state")
@@ -6096,7 +6138,7 @@ async def api_tutor_chat_stream(req: TutorStreamRequest, request: FastAPIRequest
                 log_stream_interrupted("before_final")
                 return
 
-            yield encode_tutor_stream_event("final", text=final_reply, provider=provider_used)
+            yield encode_tutor_stream_event("final", text=final_reply, provider=provider_used, **completion_metadata(finish_reason))
             if correction:
                 yield encode_tutor_stream_event("correction", text=correction)
             if tips:
@@ -6119,6 +6161,7 @@ async def api_tutor_chat_stream(req: TutorStreamRequest, request: FastAPIRequest
                 conversation_id=conv_id,
                 provider=provider_used,
                 degraded_reason=degraded_reason,
+                **completion_metadata(finish_reason),
             )
         except GeneratorExit:
             return
@@ -6154,6 +6197,7 @@ def api_tutor_chat_commit(req: TutorStreamCommitRequest) -> dict[str, Any]:
         level=req.level,
         message=req.message,
         reply=req.reply,
+        finish_reason=req.finish_reason,
     )
     return {"conversation_id": req.conversation_id, "committed": True}
 

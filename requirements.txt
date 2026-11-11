@@ -1,9 +1,19 @@
+# Core application (Python 3.11 audited; no fresh-install lockfile).
 fastapi
 uvicorn
 python-dotenv
-websockets<14
 python-multipart
+# The code uses Pydantic 2 model_dump/model_validate APIs.
+pydantic>=2,<3
+# Windows does not normally ship the IANA database used by zoneinfo.
+tzdata; sys_platform == "win32"
+
+# Automated tests: FastAPI TestClient requires httpx.
 pytest
+httpx
+# Required by HTTPS helper tests; runtime HTTPS remains optional.
 trustme
-faster-whisper
-piper-tts
+
+# Optional audio, installed separately only when required (see README.md):
+# python -m pip install faster-whisper
+# python -m pip install piper-tts
