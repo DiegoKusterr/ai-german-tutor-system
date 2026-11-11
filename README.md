@@ -2,7 +2,7 @@
 
 A personal engineering portfolio project for German conversation practice and structured study. It combines a Python/FastAPI backend, a browser interface, local Ollama inference, and persistent learning workflows. The aim is to connect practice, feedback, review and progress tracking while keeping the application's learning data on the user's computer.
 
-This is a **desktop-first, locally hosted, single-user prototype**, not a production service or a validated language assessment product. Windows desktop browser text conversations and browser-based German voice playback have been manually tested. Running the app requires local Python, Ollama and dependency setup; this repository is not a publicly hosted interactive demo.
+This is a **desktop-first, locally hosted, single-user prototype**, not a production service or a validated language assessment product. Windows desktop text conversations, browser-based German voice playback and an end-to-end browser voice conversation have been manually tested under the conditions below. Running the app requires local Python, Ollama and dependency setup; this repository is not a publicly hosted interactive demo.
 
 ## Implemented features
 
@@ -146,12 +146,12 @@ Automated validation has used an existing Windows environment with Python **3.11
 | Verified by automated backend tests | Schemas, grammar/practice services, flashcards/review, target-level readiness, assessment input guards, completed-speaking-session rejection, CSV escaping and configuration loading |
 | Verified in process with synthetic data | API behavior, local CORS handling, conversation commit/history, JSON save/load and SQLite interactions |
 | Verified through mocks/source checks | Ollama request consistency, streaming events and truncation metadata, launcher defaults, public-mode safeguards, TTS adapters and browser voice selection/playback lifecycle |
-| Verified by a short local API smoke test | Integrated application with existing `llama3.2:1b`: three fictional German conversation turns, genuine Ollama responses, incremental streaming, context recall and conversation persistence after restarting only FastAPI |
-| Manually tested on Windows desktop | Browser text conversations and browser-based German voice playback |
-| Requires further integration/manual testing | Complete browser navigation, microphone capture/transcription, optional audio providers and HTTPS; mobile layouts and audio workflows are not validated or optimized |
+| Verified by short local API checks | Integrated application with existing `llama3.2:1b`: genuine German Ollama responses, incremental streaming and conversation persistence after restarting only FastAPI |
+| Manually tested on Windows desktop | Text conversations, browser German TTS and an end-to-end browser speech recognition → Ollama → spoken reply workflow from a second Windows computer over LAN, using a temporary Chrome secure-origin development exception |
+| Requires further integration/manual testing | Complete browser navigation, local Faster Whisper microphone transcription, optional audio providers and HTTPS; mobile layouts and audio workflows are not validated or optimized |
 | Not established | Fresh installation, long-term reliability, production/public deployment, validated CEFR proficiency or exam pass prediction |
 
-Earlier real-Ollama investigation informed the example configuration. The subsequent three-turn smoke test verifies only the short local API workflow above; it does not establish general language quality, fully functional voice interaction or long-term reliability. Mocked request tests do not prove actual model availability, speed, response quality or elimination of model reloads on another machine.
+Earlier real-Ollama investigation informed the example configuration. Context recall succeeded in earlier tests, but a subsequent `llama3.2:1b` check misremembered the topic and omitted details: conversational recall is not consistently reliable. The short API checks and Windows voice test do not establish general language quality, compatibility across installations or long-term reliability. Mocked request tests do not prove actual model availability, speed, response quality or elimination of model reloads on another machine.
 
 To avoid using personal learning stores, run tests in a **separate PowerShell terminal** with fresh temporary paths:
 
@@ -180,11 +180,13 @@ Text chat and structured-learning APIs can run without these optional packages o
 
 | Capability | Additional requirement | Status/limitations |
 | --- | --- | --- |
-| Server transcription | `faster-whisper` plus an available compatible model | Package/native import checked in the audit environment; microphone capture and real transcription not validated |
+| Server transcription | `faster-whisper` plus an available compatible model | Package/native import checked; local Faster Whisper microphone transcription has not been validated end to end |
 | Local tutor TTS | `piper-tts` plus a voice `.onnx` and matching `.onnx.json` | Piper was absent in the audit environment; adapter tests used mocks |
 | Browser tutor playback | Browser speech synthesis and an available German system/browser voice | Manually tested on Windows; exact matches are retained, otherwise a German voice is selected. Requested gender is preferred when identifiable but is not guaranteed |
-| Browser dictation | Compatible browser, microphone permission and a secure context where required | Microphone transcription is not validated end to end; recognition may use a vendor's external service |
+| Browser dictation | Browser recognition support, microphone permission and a suitable security context | Manually verified in the Windows voice test below; recognition may use external speech services |
 | Mock-exam audio | Windows PowerShell/System.Speech and a suitable installed voice | Optional helper; disabled by `MOCK_AUDIO_PROVIDER=none` in the example; playback not validated |
+
+A real end-to-end voice conversation was manually tested from a second Windows computer over the local network: German microphone input → browser speech recognition → Ollama response → browser TTS, with the spoken reply heard by the tester. Access used an HTTP LAN address and a **temporary Chrome secure-origin development exception**. That exception was a browser setting, not a source-code change or a validated secure deployment. This test does not validate local Faster Whisper transcription, clean installations or production/mobile support.
 
 Install an optional Python package only when deliberately enabling that feature, for example:
 
@@ -212,6 +214,6 @@ The backend and Ollama default to loopback, and learning stores are local. No ho
 
 Default CORS is an explicit list of local HTTP/HTTPS origins, without credentialed CORS. Custom cross-origin clients need deliberate `ALLOWED_ORIGINS` configuration. CORS is not authentication; this prototype has no production authentication/authorization boundary.
 
-LAN binding requires an explicit launcher choice such as `--lan --host 0.0.0.0`. Local HTTPS is optional via `--https`; it generates certificate files and does not install a trust certificate. Public access uses the separate `run_public_tunnel.py` helper and requires **both** `--public` and `--demo-data-dir` pointing to a fresh, empty directory separate from personal learning data. It must start in a fresh process. An existing tunnel client is required; the helper does not install one. Use fictional demonstration content only. These optional network modes have not been validated end to end and should not be used to expose personal study data.
+LAN binding requires an explicit launcher choice such as `--lan --host 0.0.0.0`. Local HTTPS is optional via `--https`; it generates certificate files and does not install a trust certificate. Public access uses the separate `run_public_tunnel.py` helper and requires **both** `--public` and `--demo-data-dir` pointing to a fresh, empty directory separate from personal learning data. It must start in a fresh process. An existing tunnel client is required; the helper does not install one. Use fictional demonstration content only. The Windows LAN browser workflow was tested under the development exception described above; HTTPS and public-tunnel workflows remain unverified and should not be used to expose personal study data.
 
 The older installation/microphone helper scripts are manual utilities, not prerequisites for local text use; they were not exercised in the audit. Review their effects before running them. There is no public hosted demo, and the project is not ready for an unprotected production deployment.
