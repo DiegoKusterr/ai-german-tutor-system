@@ -6,20 +6,25 @@ import os
 import re
 import shutil
 import subprocess
+import sys
 import threading
 import time
 from pathlib import Path
+
+from dotenv import load_dotenv
 
 from run_local_servers import (
     build_server_threads,
     describe_runtime_config,
     open_browser_if_requested,
     wait_for_app_readiness,
+    validate_bind_host,
 )
 
 TRYCLOUDFLARE_URL_RE = re.compile(r"https://[a-z0-9-]+\.trycloudflare\.com", re.IGNORECASE)
 GENERIC_HTTPS_URL_RE = re.compile(r"https://[^\s\]]+", re.IGNORECASE)
 QUICK_TUNNEL_HOME = Path(__file__).resolve().parent / "data" / "cloudflared_quick"
+_PUBLIC_DEMO_DIR: Path | None = None
 
 
 @dataclass
@@ -31,16 +36,50 @@ class TunnelHandle:
     log_thread: threading.Thread
 
 
-def parse_args() -> argparse.Namespace:
+def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Run local servers plus a free public HTTPS quick tunnel.")
-    parser.add_argument("--host", default="0.0.0.0")
+    parser.add_argument("--public", action="store_true", required=True, help="Explicit opt-in to publish synthetic demonstration data.")
+    parser.add_argument("--demo-data-dir", type=Path, required=True, help="Fresh empty directory, separate from personal learning data.")
+    parser.add_argument("--host", default="127.0.0.1")
+    parser.add_argument("--https", action="store_true", help="Also enable optional local HTTPS certificate files.")
     parser.add_argument("--http-port", type=int, default=8000)
     parser.add_argument("--https-port", type=int, default=8443)
     parser.add_argument("--local-ip", default="")
     parser.add_argument("--open-url", default="")
     parser.add_argument("--startup-timeout", type=float, default=90.0)
     parser.add_argument("--expected-provider", choices=["ollama", "rulebased"], default="ollama")
-    return parser.parse_args()
+    args = parser.parse_args(argv)
+    try:
+        validate_bind_host(args.host)
+    except ValueError as exc:
+        parser.error(str(exc))
+    return args
+
+
+def prepare_demo_data(directory: Path) -> None:
+    global QUICK_TUNNEL_HOME, _PUBLIC_DEMO_DIR
+    base = Path(__file__).resolve().parent
+    demo = directory.expanduser().resolve()
+    private = Path(os.getenv("APP_DATA_DIR", str(base / "data"))).resolve()
+    private_db = Path(os.getenv("APP_DB_PATH", str(private / "learning_app.db"))).resolve()
+    if demo == private or demo.is_relative_to(private) or private.is_relative_to(demo) or private_db.is_relative_to(demo):
+        raise ValueError("Public mode requires a separate demonstration data directory.")
+    if demo.exists() and (not demo.is_dir() or any(demo.iterdir())):
+        raise ValueError("Public mode requires a fresh empty demonstration directory.")
+    demo.mkdir(parents=True, exist_ok=True)
+    os.environ["APP_DATA_DIR"] = str(demo)
+    os.environ["APP_DB_PATH"] = str(demo / "learning_app.db")
+    QUICK_TUNNEL_HOME = demo / "tunnel-profile"
+    _PUBLIC_DEMO_DIR = demo
+
+
+def require_demo_mode() -> None:
+    if (
+        _PUBLIC_DEMO_DIR is None
+        or Path(os.environ.get("APP_DATA_DIR", "")).resolve() != _PUBLIC_DEMO_DIR
+        or Path(os.environ.get("APP_DB_PATH", "")).resolve() != _PUBLIC_DEMO_DIR / "learning_app.db"
+    ):
+        raise RuntimeError("Public tunnels require explicit isolated demonstration mode.")
 
 
 def find_cloudflared() -> str:
@@ -129,6 +168,7 @@ def parse_localhost_run_url(line: str) -> str | None:
 
 
 def start_quick_tunnel(http_port: int) -> TunnelHandle:
+    require_demo_mode()
     cloudflared = find_cloudflared()
     command = [
         cloudflared,
@@ -172,6 +212,7 @@ def start_quick_tunnel(http_port: int) -> TunnelHandle:
 
 
 def start_localhost_run_tunnel(http_port: int) -> TunnelHandle:
+    require_demo_mode()
     ssh = find_ssh()
     command = [
         ssh,
@@ -241,15 +282,27 @@ def wait_for_public_url(handle: TunnelHandle, timeout_s: float = 20.0) -> str:
 
 def main() -> int:
     args = parse_args()
+    # Reusing an already imported app could retain personal database/state paths.
+    if "main" in sys.modules or any(name == "learning_app" or name.startswith("learning_app.") for name in sys.modules):
+        print("Public mode must start in a fresh process before application imports.")
+        return 2
+    load_dotenv(override=False)
+    try:
+        prepare_demo_data(args.demo_data_dir)
+    except ValueError as exc:
+        print(exc)
+        return 2
     http_server, http_thread, https_server, https_thread = build_server_threads(
         host=args.host,
         http_port=args.http_port,
         https_port=args.https_port,
         local_ip=args.local_ip,
+        enable_https=args.https,
     )
 
     http_thread.start()
-    https_thread.start()
+    if https_thread is not None:
+        https_thread.start()
 
     tunnel_handle: TunnelHandle | None = None
 
@@ -297,7 +350,7 @@ def main() -> int:
         warned_tunnel = False
         while True:
             http_alive = http_thread.is_alive()
-            https_alive = https_thread.is_alive()
+            https_alive = bool(https_thread and https_thread.is_alive())
 
             if not http_alive and not https_alive:
                 break
@@ -310,7 +363,7 @@ def main() -> int:
                 )
                 warned_http = True
 
-            if not https_alive and not warned_https:
+            if https_thread is not None and not https_alive and not warned_https:
                 print()
                 print(
                     f"El servidor HTTPS en el puerto {args.https_port} no esta disponible. "
@@ -337,10 +390,12 @@ def main() -> int:
         return 1
     finally:
         http_server.should_exit = True
-        https_server.should_exit = True
+        if https_server is not None:
+            https_server.should_exit = True
         stop_tunnel(tunnel_handle)
         http_thread.join(timeout=5)
-        https_thread.join(timeout=5)
+        if https_thread is not None:
+            https_thread.join(timeout=5)
 
     return 0
 

@@ -32,8 +32,10 @@ def test_public_launcher_and_tunnel_script_exist() -> None:
     runner = Path("run_public_tunnel.py").read_text(encoding="utf-8")
     readme = Path("README.md").read_text(encoding="utf-8")
 
-    assert "cloudflared" in launcher
-    assert "winget install --id Cloudflare.cloudflared" in launcher
+    assert "run_local_servers.py %*" in launcher
+    assert 'parser.add_argument("--public"' in runner
+    assert 'parser.add_argument("--demo-data-dir"' in runner
+    assert "require_demo_mode()" in runner
     assert "trycloudflare" in runner
     assert "localhost.run" in runner
     assert "iniciar_chatbot.bat" in readme

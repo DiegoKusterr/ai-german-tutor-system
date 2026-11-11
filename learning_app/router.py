@@ -118,6 +118,7 @@ from .services import (
     upsert_manual_rating,
     upsert_recommendation_feedback,
 )
+from .services.learning import SpeakingSessionCompleteError
 
 router = APIRouter(prefix="/api", tags=["learning-platform"])
 
@@ -296,6 +297,8 @@ def speaking_simulate(req: SpeakingSimulateRequest) -> SpeakingSimulationPayload
 def speaking_feedback(req: SpeakingFeedbackRequest) -> SpeakingTurnPayload:
     try:
         return submit_speaking_turn(req)
+    except SpeakingSessionCompleteError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 

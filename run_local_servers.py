@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import ipaddress
 import json
 import os
 import threading
@@ -13,25 +14,50 @@ from urllib.request import Request as UrlRequest, urlopen
 import uvicorn
 
 from local_https import ensure_local_https_materials
-from main import app
 
 
-def parse_args() -> argparse.Namespace:
+def validate_bind_host(host: str, *, allow_lan: bool = False) -> None:
+    try:
+        loopback = host == "localhost" or ipaddress.ip_address(host).is_loopback
+    except ValueError:
+        loopback = False
+    if not loopback and not allow_lan:
+        raise ValueError("Non-loopback binding requires explicit --lan opt-in.")
+
+
+def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Run local HTTP and HTTPS servers for the chatbot.")
-    parser.add_argument("--host", default="0.0.0.0")
+    parser.add_argument("--host", default="127.0.0.1")
+    parser.add_argument("--lan", action="store_true", help="Explicitly allow a non-loopback bind address.")
+    parser.add_argument("--https", action="store_true", help="Explicitly generate local certificate files and enable HTTPS; does not install a certificate.")
     parser.add_argument("--http-port", type=int, default=8000)
     parser.add_argument("--https-port", type=int, default=8443)
     parser.add_argument("--local-ip", default="")
     parser.add_argument("--open-url", default="")
     parser.add_argument("--startup-timeout", type=float, default=90.0)
     parser.add_argument("--expected-provider", choices=["ollama", "rulebased"], default="ollama")
-    return parser.parse_args()
+    args = parser.parse_args(argv)
+    try:
+        validate_bind_host(args.host, allow_lan=args.lan)
+    except ValueError as exc:
+        parser.error(str(exc))
+    return args
 
 
-def build_server_threads(*, host: str, http_port: int, https_port: int, local_ip: str) -> tuple[uvicorn.Server, threading.Thread, uvicorn.Server, threading.Thread]:
-    materials = ensure_local_https_materials(local_ip=local_ip)
+def build_server_threads(
+    *, host: str, http_port: int, https_port: int, local_ip: str,
+    enable_https: bool = False, allow_lan: bool = False,
+) -> tuple[uvicorn.Server, threading.Thread, uvicorn.Server | None, threading.Thread | None]:
+    validate_bind_host(host, allow_lan=allow_lan)
+    # Public demo paths must be selected before application configuration imports.
+    from main import app
 
     http_config = uvicorn.Config(app, host=host, port=http_port, reload=False, log_level="info", lifespan="on")
+    http_server = uvicorn.Server(http_config)
+    http_thread = threading.Thread(target=http_server.run, name="chatbot-http", daemon=True)
+    if not enable_https:
+        return http_server, http_thread, None, None
+    materials = ensure_local_https_materials(local_ip=local_ip)
     https_config = uvicorn.Config(
         app,
         host=host,
@@ -43,10 +69,8 @@ def build_server_threads(*, host: str, http_port: int, https_port: int, local_ip
         ssl_keyfile=str(materials.key_path),
     )
 
-    http_server = uvicorn.Server(http_config)
     https_server = uvicorn.Server(https_config)
 
-    http_thread = threading.Thread(target=http_server.run, name="chatbot-http", daemon=True)
     https_thread = threading.Thread(target=https_server.run, name="chatbot-https", daemon=True)
     return http_server, http_thread, https_server, https_thread
 
@@ -164,7 +188,7 @@ def open_browser_if_requested(url: str) -> None:
 def monitor_server_threads(
     *,
     http_thread: threading.Thread,
-    https_thread: threading.Thread,
+    https_thread: threading.Thread | None,
     http_port: int,
     https_port: int,
 ) -> None:
@@ -172,7 +196,7 @@ def monitor_server_threads(
     warned_https = False
     while True:
         http_alive = http_thread.is_alive()
-        https_alive = https_thread.is_alive()
+        https_alive = bool(https_thread and https_thread.is_alive())
 
         if not http_alive and not https_alive:
             break
@@ -185,7 +209,7 @@ def monitor_server_threads(
             )
             warned_http = True
 
-        if not https_alive and not warned_https:
+        if https_thread is not None and not https_alive and not warned_https:
             print()
             print(
                 f"El servidor HTTPS en el puerto {https_port} no esta disponible. "
@@ -203,10 +227,13 @@ def main() -> int:
         http_port=args.http_port,
         https_port=args.https_port,
         local_ip=args.local_ip,
+        enable_https=args.https,
+        allow_lan=args.lan,
     )
 
     http_thread.start()
-    https_thread.start()
+    if https_thread is not None:
+        https_thread.start()
 
     exit_code = 0
     try:
@@ -226,16 +253,17 @@ def main() -> int:
         )
     except KeyboardInterrupt:
         http_server.should_exit = True
-        https_server.should_exit = True
     except RuntimeError as exc:
         exit_code = 1
         print()
         print(exc)
     finally:
         http_server.should_exit = True
-        https_server.should_exit = True
+        if https_server is not None:
+            https_server.should_exit = True
         http_thread.join(timeout=5)
-        https_thread.join(timeout=5)
+        if https_thread is not None:
+            https_thread.join(timeout=5)
 
     return exit_code
 

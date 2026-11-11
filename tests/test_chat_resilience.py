@@ -418,11 +418,10 @@ def test_startup_launcher_exports_runtime_and_waits_for_ready_config() -> None:
     local_runner = Path("run_local_servers.py").read_text(encoding="utf-8")
     public_runner = Path("run_public_tunnel.py").read_text(encoding="utf-8")
 
-    assert 'call :read_env OLLAMA_MODEL OLLAMA_MODEL llama3.2:3b' in launcher
-    assert 'set "CHAT_PROVIDER=%PROVIDER%"' in launcher
-    assert 'set "OLLAMA_MODEL=%OLLAMA_MODEL%"' in launcher
-    assert 'set "OLLAMA_BASE_URL=%OLLAMA_BASE_URL%"' in launcher
-    assert '--open-url "%URL_PC%"' in launcher
+    assert 'set "PYTHON_EXE=%CD%\\.venv\\Scripts\\python.exe"' in launcher
+    assert '"%PYTHON_EXE%" run_local_servers.py %*' in launcher
+    assert "--open-url" not in launcher
+    assert "open_browser_if_requested(args.open_url)" in local_runner
     assert 'start "" "%URL_PC%"' not in launcher
     assert "wait_for_app_readiness(" in local_runner
     assert 'provider == "ollama" and not llm_required and bool(active_model)' in local_runner

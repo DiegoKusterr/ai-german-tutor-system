@@ -33,6 +33,8 @@ class ApiChatResponse(BaseModel):
     mode: ChatMode
     correction: str | None = None
     tips: list[str] = Field(default_factory=list)
+    finish_reason: str | None = None
+    truncated: bool = False
 
 
 class TutorStreamRequest(BaseModel):
